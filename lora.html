@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>SGTD IIoT Hub — LoRa / LoRaWAN</title>
+  <link rel="icon" type="image/svg+xml" href="assets/img/favicon.svg"/>
+  <link rel="stylesheet" href="assets/css/style.css"/>
+  <script src="assets/vendor/chart.umd.js"></script>
+</head>
+<body>
+<script src="assets/js/icons.js"></script>
+<script src="assets/js/mock-data.js"></script>
+<script src="assets/js/charts.js"></script>
+<script src="assets/js/layout.js"></script>
+<script>
+  const content = renderLayout({
+    pageId: 'lora',
+    title: 'LoRa / LoRaWAN Network',
+    crumb: 'SGTD · Networks · LoRa',
+  });
+
+  const loraDevs = DEVICES.filter(d => d.protocol === 'LoRa');
+  const loraGws = GATEWAYS.filter(g => g.type === 'LoRa');
+
+  content.innerHTML = `
+    <div class="kpi-grid">
+      <div class="kpi"><div class="ico-bg">${ICONS.signal}</div>
+        <div class="label">Network Server</div>
+        <div class="value" style="color:var(--ok);font-size:22px;">● ONLINE</div>
+        <div class="trend up">ChirpStack 4.6 · EU868</div>
+      </div>
+      <div class="kpi"><div class="ico-bg">${ICONS.devices}</div>
+        <div class="label">End Devices</div>
+        <div class="value">${loraDevs.length}</div>
+        <div class="trend up">${loraDevs.filter(d => d.status === 'ok').length} active</div>
+      </div>
+      <div class="kpi"><div class="ico-bg">${ICONS.lora}</div>
+        <div class="label">Gateways</div>
+        <div class="value">${loraGws.length}</div>
+        <div class="trend up">${loraGws.filter(g=>g.status==='ok').length} healthy</div>
+      </div>
+      <div class="kpi"><div class="ico-bg">${ICONS.bolt}</div>
+        <div class="label">Avg RSSI</div>
+        <div class="value">${Math.round(loraDevs.reduce((a,d) => a + d.rssi, 0) / loraDevs.length)} dBm</div>
+        <div class="trend up">SNR ${(loraDevs.reduce((a,d) => a + d.snr, 0) / loraDevs.length).toFixed(1)} dB</div>
+      </div>
+    </div>
+
+    <div class="grid-12" style="margin-top:18px;">
+      <div class="card col-8">
+        <h3>${ICONS.pulse} Uplinks per minute <span class="meta">last 60 minutes</span></h3>
+        <div class="chart-wrap"><canvas id="ch-uplinks"></canvas></div>
+      </div>
+      <div class="card col-4">
+        <h3>Spreading Factor distribution</h3>
+        <div class="chart-wrap"><canvas id="ch-sf"></canvas></div>
+      </div>
+
+      <div class="card col-12">
+        <h3>${ICONS.lora} Gateways</h3>
+        <table class="t">
+          <thead>
+            <tr><th>Gateway ID</th><th>Name</th><th>Facility</th><th>Firmware</th><th>Uptime</th><th>RX/h</th><th>TX/h</th><th>Status</th></tr>
+          </thead>
+          <tbody>
+            ${loraGws.map(g => {
+              const sev = g.status === 'warn' ? 'warn' : 'ok';
+              return `<tr>
+                <td class="cell-mono">${g.id}</td>
+                <td>${g.name}</td>
+                <td>${(FACILITIES.find(f=>f.id===g.facility)||{}).name||'—'}</td>
+                <td>${g.firmware}</td>
+                <td>${g.uptime}</td>
+                <td class="cell-mono">${Math.floor(rand(800, 2400))}</td>
+                <td class="cell-mono">${Math.floor(rand(120, 460))}</td>
+                <td><span class="chip ${sev}"><span class="d"></span>${g.status}</span></td>
+              </tr>`;
+            }).join('')}
+          </tbody>
+        </table>
+      </div>
+
+      <div class="card col-7">
+        <h3>End devices <span class="meta">${loraDevs.length} provisioned</span></h3>
+        <div style="max-height:380px;overflow:auto;">
+          <table class="t">
+            <thead><tr>
+              <th>DevEUI</th><th>Name</th><th>Type</th><th>RSSI / SNR</th><th>Battery</th><th>Status</th>
+            </tr></thead>
+            <tbody id="lora-rows"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="card col-5">
+        <h3>Live uplink stream</h3>
+        <div class="feed" id="upstream" style="max-height:380px;"></div>
+      </div>
+    </div>
+  `;
+
+  // Charts
+  const labels = lastNMinuteLabels(60);
+  const uplinks = genSeries(60, 90, 35, 0.25);
+  const ul = timeSeries(document.getElementById('ch-uplinks'), labels, [
+    { label: 'Uplinks', data: uplinks },
+  ]);
+
+  barChart(document.getElementById('ch-sf'),
+    ['SF7', 'SF8', 'SF9', 'SF10', 'SF11', 'SF12'],
+    [Math.floor(loraDevs.length*0.34), Math.floor(loraDevs.length*0.22),
+     Math.floor(loraDevs.length*0.18), Math.floor(loraDevs.length*0.12),
+     Math.floor(loraDevs.length*0.09), Math.floor(loraDevs.length*0.05)]);
+
+  // Device table
+  const tb = document.getElementById('lora-rows');
+  const tpls = new Map();
+  loraDevs.forEach(d => {
+    const sev = d.status === 'danger' ? 'danger' : d.status === 'warn' ? 'warn' : 'ok';
+    const batClass = d.battery > 60 ? 'ok' : d.battery > 30 ? 'warn' : 'danger';
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td class="cell-mono">${d.devEui}</td>
+      <td>${d.id} — ${d.type}</td>
+      <td>${d.type}</td>
+      <td class="cell-mono" data-rssi>${d.rssi} dBm / ${d.snr} dB</td>
+      <td>
+        <div style="display:flex;align-items:center;gap:8px;">
+          <span class="cell-mono">${d.battery}%</span>
+          <div class="progress" style="flex:1;max-width:80px;">
+            <span style="width:${d.battery}%;background:linear-gradient(90deg,${batClass==='danger'?'#ef4444':batClass==='warn'?'#f59e0b':'#10b981'},${batClass==='danger'?'#fb7185':batClass==='warn'?'#fbbf24':'#34d399'});"></span>
+          </div>
+        </div>
+      </td>
+      <td><span class="chip ${sev}"><span class="d"></span>${d.status}</span></td>
+    `;
+    tb.appendChild(tr);
+    tpls.set(d.id, tr);
+  });
+
+  // Live uplinks
+  const stream = document.getElementById('upstream');
+  BUS.addEventListener('telemetry', e => {
+    if (e.detail.protocol !== 'LoRa') return;
+    const d = e.detail;
+    const item = document.createElement('div');
+    item.className = 'feed-item';
+    item.innerHTML = `
+      <div class="ts">${new Date().toLocaleTimeString()}</div>
+      <div style="flex:1;min-width:0;">
+        <div class="src">devEUI:${d.devEui}</div>
+        <div class="msg" style="font-family:var(--mono);font-size:12px;">
+          val=<strong>${d.value.toFixed(2)}${d.unit}</strong> · rssi=${d.rssi} · snr=${d.snr} · port=${1 + Math.floor(Math.random()*5)}
+        </div>
+      </div>
+    `;
+    stream.prepend(item);
+    while (stream.childElementCount > 16) stream.lastElementChild.remove();
+
+    const tr = tpls.get(d.id);
+    if (tr) tr.querySelector('[data-rssi]').textContent = `${d.rssi} dBm / ${d.snr} dB`;
+  });
+
+  setInterval(() => {
+    labels.shift(); labels.push(new Date().getMinutes().toString().padStart(2,'0'));
+    uplinks.shift(); uplinks.push(85 + Math.floor(rand(-25, 50)));
+    ul.update('none');
+  }, 8_000);
+
+  BUS.start();
+</script>
+</body>
+</html>

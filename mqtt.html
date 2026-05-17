@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>SGTD IIoT Hub — MQTT Broker</title>
+  <link rel="icon" type="image/svg+xml" href="assets/img/favicon.svg"/>
+  <link rel="stylesheet" href="assets/css/style.css"/>
+  <script src="assets/vendor/chart.umd.js"></script>
+</head>
+<body>
+<script src="assets/js/icons.js"></script>
+<script src="assets/js/mock-data.js"></script>
+<script src="assets/js/charts.js"></script>
+<script src="assets/js/layout.js"></script>
+<script>
+  const content = renderLayout({
+    pageId: 'mqtt',
+    title: 'MQTT Broker',
+    crumb: 'SGTD · Networks · MQTT',
+  });
+
+  const mqttDevs = DEVICES.filter(d => d.protocol === 'MQTT');
+  const topics = mqttDevs.map(d => d.topic);
+  const subscribers = mqttDevs.length;
+
+  content.innerHTML = `
+    <div class="kpi-grid">
+      <div class="kpi"><div class="ico-bg">${ICONS.signal}</div>
+        <div class="label">Broker Status</div>
+        <div class="value" style="color:var(--ok);font-size:22px;">● ONLINE</div>
+        <div class="trend up">Mosquitto 2.0.18 · TLS</div>
+      </div>
+      <div class="kpi"><div class="ico-bg">${ICONS.cpu}</div>
+        <div class="label">Active Clients</div>
+        <div class="value">${subscribers}</div>
+        <div class="trend up">▲ 6 last hour</div>
+      </div>
+      <div class="kpi"><div class="ico-bg">${ICONS.pulse}</div>
+        <div class="label">Inbound / sec</div>
+        <div class="value" id="kpi-in">—</div>
+        <div class="trend up">avg load 32%</div>
+      </div>
+      <div class="kpi"><div class="ico-bg">${ICONS.bolt}</div>
+        <div class="label">Topics</div>
+        <div class="value">${topics.length}</div>
+        <div class="trend up">All retained</div>
+      </div>
+    </div>
+
+    <div class="grid-12" style="margin-top:18px;">
+      <div class="card col-8">
+        <h3>${ICONS.pulse} Broker throughput <span class="meta">PUBLISH/SUBSCRIBE — last 30 min</span></h3>
+        <div class="chart-wrap"><canvas id="ch-throughput"></canvas></div>
+      </div>
+      <div class="card col-4">
+        <h3>QoS distribution</h3>
+        <div class="chart-wrap"><canvas id="ch-qos"></canvas></div>
+      </div>
+
+      <div class="card col-6">
+        <h3>${ICONS.signal} Active subscriptions <span class="meta">${topics.length} topics</span></h3>
+        <div style="max-height:340px;overflow:auto;">
+          <table class="t">
+            <thead><tr><th>Topic</th><th>QoS</th><th>Retained</th><th>Last msg</th></tr></thead>
+            <tbody id="topic-list"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="card col-6">
+        <h3>Live message stream <span class="meta"><span class="live"><span class="dot"></span>STREAMING</span></span></h3>
+        <div class="feed" id="msgs" style="max-height:340px;"></div>
+      </div>
+
+      <div class="card col-12">
+        <h3>Quick Publish <span class="meta">test message to any topic</span></h3>
+        <div class="grid-3">
+          <div>
+            <label class="fld">Topic</label>
+            <input class="input" id="pub-topic" placeholder="sgtd/plt-01/temperature/01" value="sgtd/plt-01/control/pump-3"/>
+          </div>
+          <div>
+            <label class="fld">QoS</label>
+            <select class="input" id="pub-qos">
+              <option>0 — At most once</option>
+              <option selected>1 — At least once</option>
+              <option>2 — Exactly once</option>
+            </select>
+          </div>
+          <div>
+            <label class="fld">Retain</label>
+            <select class="input"><option>No</option><option>Yes</option></select>
+          </div>
+        </div>
+        <div style="margin-top:12px;">
+          <label class="fld">Payload (JSON)</label>
+          <textarea class="input" id="pub-payload" rows="4">{ "command": "stop", "issued_by": "operator-1" }</textarea>
+        </div>
+        <div style="margin-top:12px;display:flex;gap:10px;">
+          <button class="btn primary" id="pub-btn">Publish message</button>
+          <button class="btn ghost">Save as preset</button>
+        </div>
+        <div id="pub-result" style="margin-top:10px;font-family:var(--mono);font-size:12px;color:var(--text-mute);"></div>
+      </div>
+    </div>
+  `;
+
+  // Charts
+  const labels = lastNMinuteLabels(30);
+  const pub = genSeries(30, 380, 80, 0.18);
+  const sub = genSeries(30, 410, 70, 0.16);
+  const tp = timeSeries(document.getElementById('ch-throughput'), labels, [
+    { label: 'PUBLISH', data: pub },
+    { label: 'SUBSCRIBE', data: sub },
+  ]);
+
+  const qos0 = mqttDevs.filter(d => d.qos === 0).length;
+  const qos1 = mqttDevs.filter(d => d.qos === 1).length;
+  const qos2 = mqttDevs.filter(d => d.qos === 2).length;
+  doughnut(document.getElementById('ch-qos'),
+    ['QoS 0', 'QoS 1', 'QoS 2'], [qos0, qos1, qos2],
+    ['#38bdf8', '#22d3ee', '#a78bfa']);
+
+  // Topic table
+  const tl = document.getElementById('topic-list');
+  mqttDevs.slice(0, 60).forEach(d => {
+    const tr = document.createElement('tr');
+    tr.dataset.topic = d.topic;
+    tr.innerHTML = `
+      <td class="cell-mono">${d.topic}</td>
+      <td><span class="chip info"><span class="d"></span>QoS ${d.qos}</span></td>
+      <td>${Math.random() < 0.6 ? 'Yes' : 'No'}</td>
+      <td class="cell-mono" data-last>${fmtTime(d.lastSeen)}</td>
+    `;
+    tl.appendChild(tr);
+  });
+
+  // Live messages
+  const msgs = document.getElementById('msgs');
+  let inSec = 0; let inWindow = [];
+  setInterval(() => {
+    inWindow.push(inSec); if (inWindow.length > 5) inWindow.shift();
+    document.getElementById('kpi-in').textContent =
+      Math.round(inWindow.reduce((a,b)=>a+b,0) / inWindow.length / 2);
+    inSec = 0;
+  }, 2_000);
+
+  BUS.addEventListener('telemetry', e => {
+    if (e.detail.protocol !== 'MQTT') return;
+    inSec++;
+    const item = document.createElement('div');
+    item.className = 'feed-item';
+    item.innerHTML = `
+      <div class="ts">${new Date().toLocaleTimeString()}</div>
+      <div style="flex:1;min-width:0;">
+        <div class="src" style="overflow:hidden;text-overflow:ellipsis;">${e.detail.topic}</div>
+        <div class="msg" style="font-family:var(--mono);font-size:12px;">{ "value": ${e.detail.value.toFixed(2)}, "unit": "${e.detail.unit}", "ts": ${Date.now()} }</div>
+      </div>
+      <span class="chip info"><span class="d"></span>QoS ${e.detail.qos}</span>
+    `;
+    msgs.prepend(item);
+    while (msgs.childElementCount > 18) msgs.lastElementChild.remove();
+  });
+
+  // Roll throughput
+  setInterval(() => {
+    labels.shift(); labels.push(new Date().getMinutes().toString().padStart(2,'0'));
+    pub.shift(); pub.push(380 + Math.floor(rand(-50, 80)));
+    sub.shift(); sub.push(410 + Math.floor(rand(-40, 70)));
+    tp.update('none');
+  }, 6_000);
+
+  document.getElementById('pub-btn').addEventListener('click', () => {
+    const t = document.getElementById('pub-topic').value;
+    const p = document.getElementById('pub-payload').value;
+    document.getElementById('pub-result').innerHTML =
+      `<span style="color:var(--ok);">✓ PUBACK</span> · topic=<strong>${t}</strong> · bytes=${p.length} · at ${new Date().toLocaleTimeString()}`;
+  });
+
+  BUS.start();
+</script>
+</body>
+</html>

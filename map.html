@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>SGTD IIoT Hub — Network Map</title>
+  <link rel="icon" type="image/svg+xml" href="assets/img/favicon.svg"/>
+  <link rel="stylesheet" href="assets/css/style.css"/>
+  <script src="assets/vendor/chart.umd.js"></script>
+  <style>
+    #topo {
+      width: 100%; height: 480px;
+      background:
+        radial-gradient(600px 300px at 70% 30%, rgba(34,211,238,.10), transparent 60%),
+        radial-gradient(500px 280px at 20% 70%, rgba(167,139,250,.08), transparent 60%),
+        linear-gradient(180deg, #061227 0%, #04101f 100%);
+      border-radius: var(--radius);
+      position: relative;
+      overflow: hidden;
+    }
+    #topo svg { width: 100%; height: 100%; display: block; }
+    #topo .grid path { stroke: rgba(125,211,252,.07); stroke-width: 1; fill: none; }
+    .facility-node { cursor: pointer; }
+    .facility-node circle.halo { fill: rgba(34,211,238,.18); }
+    .facility-node circle.core { fill: url(#nodeGrad); stroke: #061325; stroke-width: 2; }
+    .facility-label { fill: #e6f2ff; font: 600 11px Inter, sans-serif; }
+    .facility-sub  { fill: #7dd3fc; font: 500 9px JetBrains Mono, monospace; letter-spacing: 1px; }
+    .device-dot { stroke: #061325; stroke-width: .6; }
+    .link { stroke-opacity: .35; stroke-width: 1; }
+    .pulse-ring { fill: none; stroke: #22d3ee; stroke-width: 1.5; opacity: 0; }
+  </style>
+</head>
+<body>
+<script src="assets/js/icons.js"></script>
+<script src="assets/js/mock-data.js"></script>
+<script src="assets/js/charts.js"></script>
+<script src="assets/js/layout.js"></script>
+<script>
+  const content = renderLayout({
+    pageId: 'map',
+    title: 'Network Map',
+    crumb: 'SGTD · Geographic view',
+  });
+
+  content.innerHTML = `
+    <div class="grid-12">
+      <div class="card col-8" style="padding:0;overflow:hidden;">
+        <div id="topo"></div>
+      </div>
+      <div class="card col-4">
+        <h3>${ICONS.map} Facilities <span class="meta">${FACILITIES.length} sites</span></h3>
+        <div style="display:flex;flex-direction:column;gap:8px;">
+          ${FACILITIES.map(f => {
+            const devs = DEVICES.filter(d => d.facility === f.id);
+            const ok = devs.filter(d => d.status === 'ok').length;
+            return `
+              <div class="feed-item" style="flex-direction:column;align-items:flex-start;">
+                <div style="display:flex;justify-content:space-between;width:100%;align-items:center;">
+                  <strong>${f.name}</strong>
+                  <span class="chip ok"><span class="d"></span>OPERATIONAL</span>
+                </div>
+                <div style="font-size:12px;color:var(--text-mute);margin-top:4px;">
+                  ${devs.length} devices · ${ok} healthy · ${devs.filter(d=>d.protocol==='LoRa').length} LoRa
+                </div>
+                <div class="progress" style="margin-top:6px;width:100%;">
+                  <span style="width:${(ok/devs.length*100).toFixed(0)}%"></span>
+                </div>
+              </div>`;
+          }).join('')}
+        </div>
+      </div>
+
+      <div class="card col-12">
+        <h3>Coverage health <span class="meta">last hour</span></h3>
+        <div class="chart-wrap"><canvas id="ch-coverage"></canvas></div>
+      </div>
+    </div>
+  `;
+
+  // ---- Custom topology renderer (self-contained, no map tiles required) ----
+  const topo = document.getElementById('topo');
+  const W = topo.clientWidth, H = topo.clientHeight;
+
+  // Project lat/lng to xy
+  const lats = FACILITIES.map(f => f.lat).concat(DEVICES.map(d => d.lat));
+  const lngs = FACILITIES.map(f => f.lng).concat(DEVICES.map(d => d.lng));
+  const minLat = Math.min(...lats) - 0.05, maxLat = Math.max(...lats) + 0.05;
+  const minLng = Math.min(...lngs) - 0.05, maxLng = Math.max(...lngs) + 0.05;
+  const project = (lat, lng) => ({
+    x: ((lng - minLng) / (maxLng - minLng)) * (W - 60) + 30,
+    y: (1 - (lat - minLat) / (maxLat - minLat)) * (H - 60) + 30,
+  });
+
+  // Build SVG
+  const svgNS = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(svgNS, 'svg');
+  svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+  svg.innerHTML = `
+    <defs>
+      <radialGradient id="nodeGrad" cx="50%" cy="50%" r="50%">
+        <stop offset="0%"  stop-color="#67e8f9"/>
+        <stop offset="100%" stop-color="#0891b2"/>
+      </radialGradient>
+      <pattern id="grid" width="60" height="60" patternUnits="userSpaceOnUse">
+        <path d="M 60 0 L 0 0 0 60" fill="none" stroke="rgba(125,211,252,.07)" stroke-width="1"/>
+      </pattern>
+      <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+        <feGaussianBlur stdDeviation="3"/>
+      </filter>
+    </defs>
+    <rect width="100%" height="100%" fill="url(#grid)"/>
+  `;
+  topo.appendChild(svg);
+
+  // Compass / coords overlay
+  const overlay = document.createElementNS(svgNS, 'g');
+  overlay.innerHTML = `
+    <text x="14" y="22" fill="#7dd3fc" font-family="JetBrains Mono, monospace" font-size="10" letter-spacing="2">SGTD NETWORK TOPOLOGY</text>
+    <text x="14" y="${H-14}" fill="#6b8aab" font-family="JetBrains Mono, monospace" font-size="9">REGION: HORN OF AFRICA · DJIBOUTI</text>
+    <g transform="translate(${W-72},${H-72})">
+      <circle r="22" fill="none" stroke="rgba(125,211,252,.25)"/>
+      <line x1="0" y1="-22" x2="0" y2="-30" stroke="#22d3ee" stroke-width="2"/>
+      <text y="-34" text-anchor="middle" fill="#22d3ee" font-family="JetBrains Mono, monospace" font-size="9">N</text>
+    </g>
+  `;
+  svg.appendChild(overlay);
+
+  // Lines: device -> facility
+  const linksLayer = document.createElementNS(svgNS, 'g');
+  svg.appendChild(linksLayer);
+  DEVICES.forEach(d => {
+    const f = FACILITIES.find(x => x.id === d.facility);
+    if (!f) return;
+    const a = project(f.lat, f.lng), b = project(d.lat, d.lng);
+    const line = document.createElementNS(svgNS, 'line');
+    line.setAttribute('x1', a.x); line.setAttribute('y1', a.y);
+    line.setAttribute('x2', b.x); line.setAttribute('y2', b.y);
+    line.setAttribute('class', 'link');
+    line.setAttribute('stroke', d.protocol === 'LoRa' ? '#a78bfa' : '#22d3ee');
+    linksLayer.appendChild(line);
+  });
+
+  // Device dots
+  const devLayer = document.createElementNS(svgNS, 'g');
+  svg.appendChild(devLayer);
+  DEVICES.forEach(d => {
+    const p = project(d.lat, d.lng);
+    const c = document.createElementNS(svgNS, 'circle');
+    c.setAttribute('cx', p.x); c.setAttribute('cy', p.y); c.setAttribute('r', 2.6);
+    const color = d.status === 'danger' ? '#ef4444' : d.status === 'warn' ? '#f59e0b' : '#10b981';
+    c.setAttribute('fill', color); c.setAttribute('class', 'device-dot');
+    c.setAttribute('data-id', d.id);
+    const title = document.createElementNS(svgNS, 'title');
+    title.textContent = `${d.id} — ${d.type} (${d.protocol}) · ${d.value.toFixed(2)} ${d.unit}`;
+    c.appendChild(title);
+    devLayer.appendChild(c);
+  });
+
+  // Facility nodes + pulse rings
+  const facLayer = document.createElementNS(svgNS, 'g');
+  svg.appendChild(facLayer);
+  const pulseRings = [];
+  FACILITIES.forEach(f => {
+    const p = project(f.lat, f.lng);
+    const g = document.createElementNS(svgNS, 'g');
+    g.setAttribute('class', 'facility-node');
+    g.setAttribute('transform', `translate(${p.x},${p.y})`);
+    g.innerHTML = `
+      <circle class="pulse-ring" r="10"/>
+      <circle class="halo" r="14"/>
+      <circle class="core" r="7"/>
+      <text class="facility-label" x="14" y="-2">${f.name.split(' — ')[0]}</text>
+      <text class="facility-sub"   x="14" y="11">${f.id}</text>
+    `;
+    facLayer.appendChild(g);
+    pulseRings.push(g.querySelector('.pulse-ring'));
+  });
+
+  // Animate pulse rings (CSS keyframes via JS for SVG)
+  let pulseT = 0;
+  setInterval(() => {
+    pulseT = (pulseT + 1) % 60;
+    pulseRings.forEach(r => {
+      const t = pulseT / 60;
+      r.setAttribute('r', 10 + t * 28);
+      r.setAttribute('opacity', (1 - t) * 0.6);
+    });
+  }, 40);
+
+  // Highlight a random device on each telemetry tick
+  BUS.addEventListener('telemetry', e => {
+    const dot = devLayer.querySelector(`[data-id="${e.detail.id}"]`);
+    if (!dot) return;
+    dot.setAttribute('r', 5);
+    dot.setAttribute('fill', '#67e8f9');
+    setTimeout(() => {
+      dot.setAttribute('r', 2.6);
+      const color = e.detail.status === 'danger' ? '#ef4444' : e.detail.status === 'warn' ? '#f59e0b' : '#10b981';
+      dot.setAttribute('fill', color);
+    }, 500);
+  });
+
+  // Coverage chart
+  const labels = lastNMinuteLabels(60);
+  timeSeries(document.getElementById('ch-coverage'), labels,
+    FACILITIES.slice(0, 4).map(f => ({
+      label: f.name.split(' — ')[0],
+      data: genSeries(60, 96, 4, 0.05),
+    }))
+  );
+
+  BUS.start();
+</script>
+</body>
+</html>

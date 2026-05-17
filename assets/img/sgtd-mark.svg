@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 56 56">
+  <defs>
+    <linearGradient id="m1" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#22d3ee"/>
+      <stop offset="100%" stop-color="#0ea5e9"/>
+    </linearGradient>
+  </defs>
+  <polygon points="28,3 51,15 51,41 28,53 5,41 5,15" fill="none" stroke="url(#m1)" stroke-width="2.4"/>
+  <circle cx="28" cy="17" r="3" fill="#22d3ee"/>
+  <circle cx="18" cy="24" r="2.4" fill="#7dd3fc"/>
+  <circle cx="38" cy="24" r="2.4" fill="#7dd3fc"/>
+  <circle cx="18" cy="32" r="2.4" fill="#7dd3fc"/>
+  <circle cx="38" cy="32" r="2.4" fill="#7dd3fc"/>
+  <circle cx="28" cy="39" r="3" fill="#22d3ee"/>
+  <g stroke="#67e8f9" stroke-width="1.1" opacity="0.85">
+    <line x1="28" y1="17" x2="18" y2="24"/>
+    <line x1="28" y1="17" x2="38" y2="24"/>
+    <line x1="18" y1="24" x2="18" y2="32"/>
+    <line x1="38" y1="24" x2="38" y2="32"/>
+    <line x1="18" y1="32" x2="28" y2="39"/>
+    <line x1="38" y1="32" x2="28" y2="39"/>
+    <line x1="18" y1="24" x2="38" y2="32"/>
+    <line x1="38" y1="24" x2="18" y2="32"/>
+  </g>
+</svg>

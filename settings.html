@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>SGTD IIoT Hub — Settings</title>
+  <link rel="icon" type="image/svg+xml" href="assets/img/favicon.svg"/>
+  <link rel="stylesheet" href="assets/css/style.css"/>
+</head>
+<body>
+<script src="assets/js/icons.js"></script>
+<script src="assets/js/mock-data.js"></script>
+<script src="assets/js/layout.js"></script>
+<script>
+  const content = renderLayout({
+    pageId: 'settings',
+    title: 'Platform Settings',
+    crumb: 'SGTD · System',
+  });
+
+  content.innerHTML = `
+    <div class="grid-12">
+      <div class="card col-6">
+        <h3>MQTT Broker</h3>
+        <div class="form-row">
+          <div>
+            <label class="fld">Host</label>
+            <input class="input" value="mqtts://broker.sgtd.local"/>
+          </div>
+          <div>
+            <label class="fld">Port</label>
+            <input class="input" value="8883"/>
+          </div>
+        </div>
+        <div class="form-row">
+          <div>
+            <label class="fld">Username</label>
+            <input class="input" value="sgtd-hub"/>
+          </div>
+          <div>
+            <label class="fld">Password</label>
+            <input class="input" type="password" value="••••••••••••"/>
+          </div>
+        </div>
+        <div class="form-row full">
+          <div>
+            <label class="fld">Default subscription</label>
+            <input class="input" value="sgtd/#"/>
+          </div>
+        </div>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px;">
+          <label style="display:flex;align-items:center;gap:10px;">
+            <span class="toggle"><input type="checkbox" checked/><span class="slider"></span></span>
+            <span style="font-size:13px;">Require TLS 1.3</span>
+          </label>
+          <button class="btn primary">Save broker config</button>
+        </div>
+      </div>
+
+      <div class="card col-6">
+        <h3>LoRaWAN Network Server</h3>
+        <div class="form-row">
+          <div>
+            <label class="fld">Stack</label>
+            <select class="input">
+              <option selected>ChirpStack 4.x</option>
+              <option>The Things Stack</option>
+              <option>Loriot</option>
+            </select>
+          </div>
+          <div>
+            <label class="fld">Region plan</label>
+            <select class="input">
+              <option>EU868</option>
+              <option>US915</option>
+              <option>AS923</option>
+              <option selected>AS923-1</option>
+            </select>
+          </div>
+        </div>
+        <div class="form-row">
+          <div>
+            <label class="fld">App Server URL</label>
+            <input class="input" value="https://chirpstack.sgtd.local:8080"/>
+          </div>
+          <div>
+            <label class="fld">API key</label>
+            <input class="input" type="password" value="cs-2f4a••••••••"/>
+          </div>
+        </div>
+        <div class="form-row full">
+          <div>
+            <label class="fld">Default ADR strategy</label>
+            <select class="input">
+              <option>Disabled</option>
+              <option selected>Static (SF9 / 14 dBm)</option>
+              <option>Adaptive</option>
+            </select>
+          </div>
+        </div>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px;">
+          <label style="display:flex;align-items:center;gap:10px;">
+            <span class="toggle"><input type="checkbox" checked/><span class="slider"></span></span>
+            <span style="font-size:13px;">Forward uplinks to MQTT bridge</span>
+          </label>
+          <button class="btn primary">Save LoRa config</button>
+        </div>
+      </div>
+
+      <div class="card col-6">
+        <h3>Notifications</h3>
+        <div style="display:flex;flex-direction:column;gap:14px;">
+          <label style="display:flex;justify-content:space-between;align-items:center;">
+            <span>Email — operations@sgtd.local</span>
+            <span class="toggle"><input type="checkbox" checked/><span class="slider"></span></span>
+          </label>
+          <label style="display:flex;justify-content:space-between;align-items:center;">
+            <span>SMS gateway (critical only)</span>
+            <span class="toggle"><input type="checkbox" checked/><span class="slider"></span></span>
+          </label>
+          <label style="display:flex;justify-content:space-between;align-items:center;">
+            <span>Slack #iiot-alerts</span>
+            <span class="toggle"><input type="checkbox"/><span class="slider"></span></span>
+          </label>
+          <label style="display:flex;justify-content:space-between;align-items:center;">
+            <span>Webhook — incident.sgtd.local/api</span>
+            <span class="toggle"><input type="checkbox" checked/><span class="slider"></span></span>
+          </label>
+        </div>
+      </div>
+
+      <div class="card col-6">
+        <h3>Data retention</h3>
+        <div class="form-row">
+          <div>
+            <label class="fld">Hot tier</label>
+            <select class="input"><option>7 days</option><option selected>30 days</option><option>90 days</option></select>
+          </div>
+          <div>
+            <label class="fld">Cold tier</label>
+            <select class="input"><option>6 months</option><option selected>2 years</option><option>5 years</option></select>
+          </div>
+        </div>
+        <div class="form-row full">
+          <div>
+            <label class="fld">Archival storage</label>
+            <select class="input">
+              <option selected>S3-compatible (MinIO)</option>
+              <option>Azure Blob</option>
+              <option>GCS</option>
+            </select>
+          </div>
+        </div>
+        <div class="form-row full">
+          <div>
+            <label class="fld">Sampling for cold tier</label>
+            <select class="input">
+              <option>All readings</option>
+              <option selected>1-min aggregates</option>
+              <option>5-min aggregates</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <div class="card col-12">
+        <h3>Branding</h3>
+        <div class="form-row">
+          <div>
+            <label class="fld">Organization</label>
+            <input class="input" value="SGTD"/>
+          </div>
+          <div>
+            <label class="fld">Primary color</label>
+            <input class="input" value="#22d3ee"/>
+          </div>
+        </div>
+        <div class="form-row">
+          <div>
+            <label class="fld">Tagline</label>
+            <input class="input" value="Industrial IoT Hub"/>
+          </div>
+          <div>
+            <label class="fld">Logo (SVG/PNG)</label>
+            <input class="input" type="file"/>
+          </div>
+        </div>
+        <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:6px;">
+          <button class="btn ghost">Reset</button>
+          <button class="btn primary">Save changes</button>
+        </div>
+      </div>
+    </div>
+  `;
+</script>
+</body>
+</html>

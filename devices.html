@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>SGTD IIoT Hub — Devices</title>
+  <link rel="icon" type="image/svg+xml" href="assets/img/favicon.svg"/>
+  <link rel="stylesheet" href="assets/css/style.css"/>
+  <script src="assets/vendor/chart.umd.js"></script>
+</head>
+<body>
+<script src="assets/js/icons.js"></script>
+<script src="assets/js/mock-data.js"></script>
+<script src="assets/js/charts.js"></script>
+<script src="assets/js/layout.js"></script>
+<script>
+  const content = renderLayout({
+    pageId: 'devices',
+    title: 'Device Fleet',
+    crumb: 'SGTD · Devices',
+  });
+
+  content.innerHTML = `
+    <div class="section-title">
+      <h2>${DEVICES.length} registered endpoints across ${FACILITIES.length} facilities</h2>
+      <div class="actions">
+        <span class="pill active" data-filter="all">All</span>
+        <span class="pill" data-filter="MQTT">MQTT</span>
+        <span class="pill" data-filter="LoRa">LoRa</span>
+        <button class="btn primary">${ICONS.plus} Provision device</button>
+      </div>
+    </div>
+
+    <div class="card" style="padding:0;">
+      <div style="padding:14px 18px;display:flex;gap:12px;align-items:center;border-bottom:1px solid var(--border);">
+        <div class="search" style="min-width:340px;">
+          ${ICONS.search}
+          <input id="q" placeholder="Filter by ID, type, facility, EUI or topic…"/>
+        </div>
+        <span style="color:var(--text-mute);font-size:12px;">Showing <span id="count">—</span> of ${DEVICES.length}</span>
+        <div style="margin-left:auto;">
+          <button class="btn ghost">${ICONS.download} Export CSV</button>
+        </div>
+      </div>
+      <div style="max-height:62vh;overflow:auto;">
+        <table class="t">
+          <thead>
+            <tr>
+              <th>Device ID</th><th>Name</th><th>Type</th><th>Protocol</th>
+              <th>Facility</th><th>Last reading</th><th>Link quality</th><th>Status</th>
+            </tr>
+          </thead>
+          <tbody id="rows"></tbody>
+        </table>
+      </div>
+    </div>
+  `;
+
+  const rows = document.getElementById('rows');
+  let filter = 'all';
+  let query = '';
+  const tpls = new Map();
+
+  function rowHTML(d) {
+    const sevClass = d.status === 'danger' ? 'danger' : d.status === 'warn' ? 'warn' : 'ok';
+    const linkQ = d.protocol === 'LoRa'
+      ? `<div style="min-width:140px;">
+           <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--text-mute);">
+             <span>RSSI ${d.rssi} dBm</span><span>SNR ${d.snr}</span>
+           </div>
+           <div class="progress" style="margin-top:4px;">
+             <span style="width:${Math.max(5, Math.min(100, (d.rssi + 120) / 60 * 100)).toFixed(0)}%"></span>
+           </div>
+         </div>`
+      : `<span class="chip info"><span class="d"></span>QoS ${d.qos}</span>`;
+    return `
+      <td class="cell-mono">${d.id}</td>
+      <td>${d.name}</td>
+      <td>${d.type}</td>
+      <td><span class="chip ${d.protocol==='MQTT'?'info':'ok'}"><span class="d"></span>${d.protocol}</span></td>
+      <td>${d.facilityName.split(' — ')[0]}</td>
+      <td class="cell-mono" data-val>${d.value.toFixed(2)} ${d.unit}</td>
+      <td>${linkQ}</td>
+      <td><span class="chip ${sevClass}"><span class="d"></span>${d.status}</span></td>
+    `;
+  }
+
+  function render() {
+    rows.innerHTML = '';
+    const q = query.toLowerCase();
+    const filtered = DEVICES.filter(d => {
+      if (filter !== 'all' && d.protocol !== filter) return false;
+      if (!q) return true;
+      return d.id.toLowerCase().includes(q)
+        || d.name.toLowerCase().includes(q)
+        || d.type.toLowerCase().includes(q)
+        || d.facilityName.toLowerCase().includes(q)
+        || (d.topic && d.topic.includes(q))
+        || (d.devEui && d.devEui.toLowerCase().includes(q));
+    });
+    document.getElementById('count').textContent = filtered.length;
+    filtered.forEach(d => {
+      const tr = document.createElement('tr');
+      tr.dataset.id = d.id;
+      tr.innerHTML = rowHTML(d);
+      rows.appendChild(tr);
+      tpls.set(d.id, tr);
+    });
+  }
+
+  document.querySelectorAll('[data-filter]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('[data-filter]').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      filter = btn.dataset.filter;
+      render();
+    });
+  });
+  document.getElementById('q').addEventListener('input', e => { query = e.target.value; render(); });
+
+  render();
+
+  // Live update
+  BUS.addEventListener('telemetry', e => {
+    const tr = tpls.get(e.detail.id);
+    if (!tr) return;
+    const cell = tr.querySelector('[data-val]');
+    if (cell) {
+      cell.textContent = e.detail.value.toFixed(2) + ' ' + e.detail.unit;
+      cell.style.color = '#22d3ee';
+      setTimeout(() => cell.style.color = '', 600);
+    }
+  });
+  BUS.start();
+</script>
+</body>
+</html>

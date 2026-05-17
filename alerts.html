@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>SGTD IIoT Hub — Alerts</title>
+  <link rel="icon" type="image/svg+xml" href="assets/img/favicon.svg"/>
+  <link rel="stylesheet" href="assets/css/style.css"/>
+  <script src="assets/vendor/chart.umd.js"></script>
+</head>
+<body>
+<script src="assets/js/icons.js"></script>
+<script src="assets/js/mock-data.js"></script>
+<script src="assets/js/charts.js"></script>
+<script src="assets/js/layout.js"></script>
+<script>
+  const content = renderLayout({
+    pageId: 'alerts',
+    title: 'Alerts & Incidents',
+    crumb: 'SGTD · Insights · Alerts',
+  });
+
+  const s = summary();
+  content.innerHTML = `
+    <div class="kpi-grid">
+      <div class="kpi"><div class="ico-bg" style="color:var(--danger);">${ICONS.alerts}</div>
+        <div class="label">Critical (Open)</div>
+        <div class="value" style="color:var(--danger);">${ALERTS.filter(a => !a.ack && a.severity==='critical').length}</div>
+        <div class="trend down">Requires immediate action</div>
+      </div>
+      <div class="kpi"><div class="ico-bg" style="color:var(--warn);">${ICONS.alerts}</div>
+        <div class="label">Warnings (Open)</div>
+        <div class="value" style="color:var(--warn);">${ALERTS.filter(a => !a.ack && a.severity==='warning').length}</div>
+        <div class="trend up">Monitor closely</div>
+      </div>
+      <div class="kpi"><div class="ico-bg">${ICONS.bell}</div>
+        <div class="label">Info (Open)</div>
+        <div class="value">${ALERTS.filter(a => !a.ack && a.severity==='info').length}</div>
+        <div class="trend up">Notifications</div>
+      </div>
+      <div class="kpi"><div class="ico-bg" style="color:var(--ok);">${ICONS.pulse}</div>
+        <div class="label">MTTR (24h)</div>
+        <div class="value">12m 04s</div>
+        <div class="trend up">▼ 3m vs week avg</div>
+      </div>
+    </div>
+
+    <div class="grid-12" style="margin-top:18px;">
+      <div class="card col-8">
+        <h3>Alerts by hour <span class="meta">past 24h</span></h3>
+        <div class="chart-wrap"><canvas id="ch-hours"></canvas></div>
+      </div>
+      <div class="card col-4">
+        <h3>By severity</h3>
+        <div class="chart-wrap"><canvas id="ch-sev"></canvas></div>
+      </div>
+      <div class="card col-12">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+          <h3 style="margin:0;">Incident queue</h3>
+          <div style="display:flex;gap:8px;">
+            <span class="pill active" data-f="all">All</span>
+            <span class="pill" data-f="critical">Critical</span>
+            <span class="pill" data-f="warning">Warnings</span>
+            <span class="pill" data-f="info">Info</span>
+            <span class="pill" data-f="open">Open</span>
+          </div>
+        </div>
+        <table class="t">
+          <thead><tr>
+            <th>ID</th><th>Severity</th><th>Source</th><th>Message</th>
+            <th>Facility</th><th>Detected</th><th>Status</th><th></th>
+          </tr></thead>
+          <tbody id="alert-rows"></tbody>
+        </table>
+      </div>
+    </div>
+  `;
+
+  // Hours chart
+  const hours = lastNHourLabels(24);
+  timeSeries(document.getElementById('ch-hours'), hours, [
+    { label: 'Critical', data: genSeries(24, 1, 1, 1).map(v => Math.max(0, Math.floor(v))) },
+    { label: 'Warning',  data: genSeries(24, 4, 3, 0.8).map(v => Math.max(0, Math.floor(v))) },
+    { label: 'Info',     data: genSeries(24, 6, 4, 0.6).map(v => Math.max(0, Math.floor(v))) },
+  ]);
+
+  // Severity doughnut
+  doughnut(document.getElementById('ch-sev'),
+    ['Critical', 'Warning', 'Info'],
+    [
+      ALERTS.filter(a => a.severity==='critical').length,
+      ALERTS.filter(a => a.severity==='warning').length,
+      ALERTS.filter(a => a.severity==='info').length,
+    ],
+    ['#ef4444', '#f59e0b', '#38bdf8']);
+
+  // Table
+  let filter = 'all';
+  const tb = document.getElementById('alert-rows');
+  function renderRows() {
+    tb.innerHTML = '';
+    const list = ALERTS.filter(a => {
+      if (filter === 'all') return true;
+      if (filter === 'open') return !a.ack;
+      return a.severity === filter;
+    });
+    list.forEach(a => {
+      const sev = a.severity === 'critical' ? 'danger' : a.severity === 'warning' ? 'warn' : 'info';
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td class="cell-mono">${a.id}</td>
+        <td><span class="chip ${sev}"><span class="d"></span>${a.severity.toUpperCase()}</span></td>
+        <td class="cell-mono">${a.source}</td>
+        <td>${a.message}</td>
+        <td>${(FACILITIES.find(f=>f.id===a.facility)||{}).name?.split(' — ')[0] || a.facility}</td>
+        <td class="cell-mono" style="color:var(--text-mute);">${fmtTime(a.ts)}</td>
+        <td>${a.ack ? '<span class="chip ok"><span class="d"></span>ACK</span>' : '<span class="chip warn"><span class="d"></span>OPEN</span>'}</td>
+        <td>${a.ack ? '' : '<button class="btn ghost" data-ack="'+a.id+'">Acknowledge</button>'}</td>
+      `;
+      tb.appendChild(tr);
+    });
+    tb.querySelectorAll('[data-ack]').forEach(b => b.addEventListener('click', () => {
+      const id = b.dataset.ack;
+      const al = ALERTS.find(x => x.id === id);
+      if (al) { al.ack = true; renderRows(); }
+    }));
+  }
+
+  document.querySelectorAll('[data-f]').forEach(p => {
+    p.addEventListener('click', () => {
+      document.querySelectorAll('[data-f]').forEach(x => x.classList.remove('active'));
+      p.classList.add('active');
+      filter = p.dataset.f; renderRows();
+    });
+  });
+  renderRows();
+
+  BUS.addEventListener('alert', renderRows);
+  BUS.start();
+</script>
+</body>
+</html>
