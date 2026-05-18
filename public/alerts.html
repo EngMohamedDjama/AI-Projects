@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>SGTD IIoT Hub — Alerts</title>
+  <link rel="icon" type="image/svg+xml" href="/assets/img/favicon.svg"/>
+  <link rel="stylesheet" href="/assets/css/style.css"/>
+  <script src="/assets/vendor/chart.umd.js"></script>
+</head>
+<body>
+<script src="/assets/js/api.js"></script>
+<script src="/assets/js/icons.js"></script>
+<script src="/assets/js/charts.js"></script>
+<script src="/assets/js/layout.js"></script>
+<script>
+  (async () => {
+    await API.guardSetup();
+    const ctx = await Shell.mount({ pageId: 'alerts', title: 'Alerts & Incidents' });
+    if (!ctx) return;
+    const onlyOpen = new URLSearchParams(location.search).get('open') === '1';
+
+    ctx.content.innerHTML = `
+      <div class="kpi-grid">
+        <div class="kpi"><div class="ico-bg" style="color:var(--danger);">${ICONS.alerts}</div>
+          <div class="label">Critical (open)</div>
+          <div class="value" id="kCritical" style="color:var(--danger);">—</div>
+          <div class="trend down">Requires action</div>
+        </div>
+        <div class="kpi"><div class="ico-bg" style="color:var(--warn);">${ICONS.alerts}</div>
+          <div class="label">Warnings (open)</div>
+          <div class="value" id="kWarn" style="color:var(--warn);">—</div>
+          <div class="trend up">Monitor</div>
+        </div>
+        <div class="kpi"><div class="ico-bg">${ICONS.bell}</div>
+          <div class="label">Info (open)</div>
+          <div class="value" id="kInfo">—</div>
+          <div class="trend up">Notifications</div>
+        </div>
+        <div class="kpi"><div class="ico-bg">${ICONS.pulse}</div>
+          <div class="label">Last 24h</div>
+          <div class="value" id="k24h">—</div>
+          <div class="trend up">Total triggered</div>
+        </div>
+      </div>
+
+      <div class="grid-12" style="margin-top:18px;">
+        <div class="card col-12">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+            <h3 style="margin:0;">Incident queue</h3>
+            <div style="display:flex;gap:8px;">
+              <span class="pill ${onlyOpen ? '' : 'active'}" data-f="all">All</span>
+              <span class="pill ${onlyOpen ? 'active' : ''}" data-f="open">Open</span>
+              <span class="pill" data-f="critical">Critical</span>
+              <span class="pill" data-f="warning">Warnings</span>
+              <span class="pill" data-f="info">Info</span>
+            </div>
+          </div>
+          <table class="t">
+            <thead><tr>
+              <th>Severity</th><th>Device</th><th>Message</th>
+              <th>Triggered</th><th>Status</th><th></th>
+            </tr></thead>
+            <tbody id="rows"></tbody>
+          </table>
+        </div>
+      </div>
+    `;
+
+    let filter = onlyOpen ? 'open' : 'all';
+    document.querySelectorAll('[data-f]').forEach(p => p.addEventListener('click', () => {
+      document.querySelectorAll('[data-f]').forEach(x => x.classList.remove('active'));
+      p.classList.add('active'); filter = p.dataset.f; load();
+    }));
+
+    async function load() {
+      let q = 'limit=200';
+      if (filter === 'open') q += '&open=1';
+      else if (filter !== 'all') q += '&severity=' + filter;
+      const r = await API.get('/api/v1/alerts?' + q);
+      render(r.alerts);
+      updateKpis();
+    }
+    async function updateKpis() {
+      const all = await API.get('/api/v1/alerts?limit=500');
+      const since = Date.now() - 86400_000;
+      const open = all.alerts.filter(a => !a.ack_ts);
+      document.getElementById('kCritical').textContent = open.filter(a => a.severity === 'critical').length;
+      document.getElementById('kWarn').textContent = open.filter(a => a.severity === 'warning').length;
+      document.getElementById('kInfo').textContent = open.filter(a => a.severity === 'info').length;
+      document.getElementById('k24h').textContent = all.alerts.filter(a => a.ts > since).length;
+    }
+    function render(alerts) {
+      const tb = document.getElementById('rows');
+      tb.innerHTML = '';
+      if (!alerts.length) {
+        tb.innerHTML = '<tr><td colspan="6" style="color:var(--text-mute);text-align:center;padding:24px;">No alerts.</td></tr>';
+        return;
+      }
+      for (const a of alerts) {
+        const sev = a.severity === 'critical' ? 'danger' : a.severity === 'warning' ? 'warn' : 'info';
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td><span class="chip ${sev}"><span class="d"></span>${a.severity.toUpperCase()}</span></td>
+          <td>${escapeHTML(a.device_name || a.device_serial || '—')}</td>
+          <td>${escapeHTML(a.message)}</td>
+          <td class="cell-mono" style="color:var(--text-mute);">${fmtRelative(a.ts)}</td>
+          <td>${a.ack_ts ? `<span class="chip ok"><span class="d"></span>ACK by ${escapeHTML(a.ack_by_name || '')}</span>` : '<span class="chip warn"><span class="d"></span>OPEN</span>'}</td>
+          <td style="text-align:right;">${a.ack_ts ? '' : `<button class="btn ghost" data-ack="${a.id}">Acknowledge</button>`}</td>`;
+        tb.appendChild(tr);
+      }
+      tb.querySelectorAll('[data-ack]').forEach(b => b.addEventListener('click', async () => {
+        await API.post('/api/v1/alerts/' + b.dataset.ack + '/ack');
+        load();
+      }));
+    }
+
+    await load();
+    Shell.on(msg => { if (msg.type === 'alert') load(); });
+  })();
+</script>
+</body>
+</html>

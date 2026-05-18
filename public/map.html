@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>SGTD IIoT Hub — Map</title>
+  <link rel="icon" type="image/svg+xml" href="/assets/img/favicon.svg"/>
+  <link rel="stylesheet" href="/assets/css/style.css"/>
+  <style>
+    #topo {
+      width: 100%; height: 540px;
+      background: radial-gradient(600px 300px at 70% 30%, rgba(34,211,238,.10), transparent 60%),
+                  radial-gradient(500px 280px at 20% 70%, rgba(167,139,250,.08), transparent 60%),
+                  linear-gradient(180deg, #061227 0%, #04101f 100%);
+      border-radius: var(--radius); position: relative; overflow: hidden;
+    }
+    #topo svg { width: 100%; height: 100%; display: block; }
+  </style>
+</head>
+<body>
+<script src="/assets/js/api.js"></script>
+<script src="/assets/js/icons.js"></script>
+<script src="/assets/js/layout.js"></script>
+<script>
+  (async () => {
+    await API.guardSetup();
+    const ctx = await Shell.mount({ pageId: 'map', title: 'Network Map' });
+    if (!ctx) return;
+
+    const r = await API.get('/api/v1/devices');
+    const devices = r.devices.filter(d => d.lat != null && d.lng != null);
+
+    ctx.content.innerHTML = `
+      <div class="grid-12">
+        <div class="card col-9" style="padding:0;overflow:hidden;">
+          <div id="topo"></div>
+        </div>
+        <div class="card col-3">
+          <h3>${ICONS.map} Legend</h3>
+          <div style="display:flex;flex-direction:column;gap:8px;font-size:13px;color:var(--text-dim);">
+            <div><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:#10b981;margin-right:8px;"></span>Online</div>
+            <div><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:#6b8aab;margin-right:8px;"></span>Offline</div>
+            <div><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:#22d3ee;margin-right:8px;box-shadow:0 0 8px #22d3ee;"></span>Live activity</div>
+          </div>
+          <h3 style="margin-top:20px;">${ICONS.devices} Devices</h3>
+          <div style="color:var(--text-mute);font-size:12px;">
+            <strong style="color:var(--text);">${devices.length}</strong> geolocated · ${r.devices.length - devices.length} without coordinates
+          </div>
+        </div>
+        <div class="card col-12">
+          <h3>${ICONS.devices} Devices on map</h3>
+          <table class="t">
+            <thead><tr><th>Name</th><th>Serial</th><th>Protocol</th><th>Location</th><th>Status</th><th></th></tr></thead>
+            <tbody>
+              ${devices.map(d => `
+                <tr>
+                  <td>${escapeHTML(d.name)}</td>
+                  <td class="cell-mono">${escapeHTML(d.serial)}</td>
+                  <td><span class="chip info"><span class="d"></span>${d.protocol.toUpperCase()}</span></td>
+                  <td class="cell-mono" style="color:var(--text-mute);">${d.lat.toFixed(4)}, ${d.lng.toFixed(4)}</td>
+                  <td><span class="chip ${d.online?'ok':'danger'}"><span class="d"></span>${d.online?'ONLINE':'OFFLINE'}</span></td>
+                  <td><a class="btn ghost" href="/device.html?id=${d.id}">Open →</a></td>
+                </tr>`).join('')}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    `;
+
+    if (!devices.length) {
+      document.getElementById('topo').innerHTML =
+        '<div style="display:grid;place-items:center;height:100%;color:var(--text-mute);">No geolocated devices yet — set lat/lng on a device to see it here.</div>';
+      return;
+    }
+
+    const topo = document.getElementById('topo');
+    const W = topo.clientWidth, H = topo.clientHeight;
+    const lats = devices.map(d => d.lat), lngs = devices.map(d => d.lng);
+    const minLat = Math.min(...lats) - 0.05, maxLat = Math.max(...lats) + 0.05;
+    const minLng = Math.min(...lngs) - 0.05, maxLng = Math.max(...lngs) + 0.05;
+    const proj = (lat, lng) => ({
+      x: ((lng - minLng) / (maxLng - minLng)) * (W - 60) + 30,
+      y: (1 - (lat - minLat) / (maxLat - minLat)) * (H - 60) + 30,
+    });
+    const ns = 'http://www.w3.org/2000/svg';
+    const svg = document.createElementNS(ns, 'svg');
+    svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+    svg.innerHTML = `
+      <defs>
+        <pattern id="g" width="60" height="60" patternUnits="userSpaceOnUse">
+          <path d="M 60 0 L 0 0 0 60" fill="none" stroke="rgba(125,211,252,.07)" stroke-width="1"/>
+        </pattern>
+      </defs>
+      <rect width="100%" height="100%" fill="url(#g)"/>
+      <text x="14" y="22" fill="#7dd3fc" font-family="JetBrains Mono, monospace" font-size="10" letter-spacing="2">SGTD NETWORK TOPOLOGY</text>
+    `;
+    topo.appendChild(svg);
+
+    // Pulse ring layer + device dots
+    devices.forEach(d => {
+      const p = proj(d.lat, d.lng);
+      const color = d.online ? '#10b981' : '#6b8aab';
+      const ring = document.createElementNS(ns, 'circle');
+      ring.setAttribute('cx', p.x); ring.setAttribute('cy', p.y);
+      ring.setAttribute('r', 6); ring.setAttribute('fill', 'none');
+      ring.setAttribute('stroke', color); ring.setAttribute('stroke-width', '1');
+      ring.setAttribute('opacity', '0.3');
+      svg.appendChild(ring);
+
+      const dot = document.createElementNS(ns, 'circle');
+      dot.setAttribute('cx', p.x); dot.setAttribute('cy', p.y);
+      dot.setAttribute('r', 4); dot.setAttribute('fill', color);
+      dot.setAttribute('data-id', d.id);
+      dot.style.cursor = 'pointer';
+      const title = document.createElementNS(ns, 'title');
+      title.textContent = `${d.name} (${d.serial})`;
+      dot.appendChild(title);
+      dot.addEventListener('click', () => location.href = '/device.html?id=' + d.id);
+      svg.appendChild(dot);
+    });
+
+    Shell.on(msg => {
+      if (msg.type !== 'telemetry') return;
+      const dot = svg.querySelector(`[data-id="${msg.device_id}"]`);
+      if (!dot) return;
+      dot.setAttribute('r', 7); dot.setAttribute('fill', '#67e8f9');
+      setTimeout(() => { dot.setAttribute('r', 4); dot.setAttribute('fill', '#10b981'); }, 600);
+    });
+  })();
+</script>
+</body>
+</html>

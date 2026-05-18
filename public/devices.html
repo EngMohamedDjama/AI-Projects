@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>SGTD IIoT Hub — Devices</title>
+  <link rel="icon" type="image/svg+xml" href="/assets/img/favicon.svg"/>
+  <link rel="stylesheet" href="/assets/css/style.css"/>
+</head>
+<body>
+<script src="/assets/js/api.js"></script>
+<script src="/assets/js/icons.js"></script>
+<script src="/assets/js/layout.js"></script>
+<script>
+  (async () => {
+    await API.guardSetup();
+    const ctx = await Shell.mount({ pageId: 'devices', title: 'Device Fleet' });
+    if (!ctx) return;
+    const editable = ['admin','editor'].includes(ctx.user.role);
+    ctx.content.innerHTML = `
+      <div class="section-title">
+        <h2 id="count-line">Loading devices…</h2>
+        <div class="actions">
+          <span class="pill active" data-filter="all">All</span>
+          <span class="pill" data-filter="mqtt">MQTT</span>
+          <span class="pill" data-filter="lora">LoRa</span>
+          <span class="pill" data-filter="http">HTTP</span>
+          ${editable ? '<button class="btn primary" id="newDev">+ Add device</button>' : ''}
+        </div>
+      </div>
+
+      <div class="card" style="padding:0;">
+        <div style="padding:14px 18px;display:flex;gap:12px;align-items:center;border-bottom:1px solid var(--border);">
+          <div class="search" style="min-width:340px;">
+            ${ICONS.search}
+            <input id="q" placeholder="Filter by name, serial, EUI…"/>
+          </div>
+        </div>
+        <div style="max-height:65vh;overflow:auto;">
+          <table class="t">
+            <thead>
+              <tr>
+                <th>Name</th><th>Serial</th><th>Protocol</th>
+                <th>Tags</th><th>Status</th><th>Last seen</th><th></th>
+              </tr>
+            </thead>
+            <tbody id="rows"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div id="modal" style="display:none;position:fixed;inset:0;background:rgba(4,12,24,.7);backdrop-filter:blur(6px);z-index:50;align-items:center;justify-content:center;padding:24px;">
+        <div class="card" style="width:600px;max-width:100%;max-height:90vh;overflow:auto;">
+          <h3 style="margin-bottom:14px;">New device</h3>
+          <form id="newForm">
+            <div class="form-row">
+              <div><label class="fld">Name</label><input class="input" name="name" required/></div>
+              <div><label class="fld">Serial</label><input class="input" name="serial" required/></div>
+            </div>
+            <div class="form-row">
+              <div>
+                <label class="fld">Protocol</label>
+                <select class="input" name="protocol" id="protoSelect">
+                  <option value="mqtt">MQTT</option>
+                  <option value="http">HTTP</option>
+                  <option value="lora">LoRaWAN</option>
+                </select>
+              </div>
+              <div><label class="fld">Tags (comma-sep)</label><input class="input" name="tags"/></div>
+            </div>
+            <div class="form-row" id="loraRow" style="display:none;">
+              <div><label class="fld">DevEUI</label><input class="input" name="dev_eui" placeholder="0123456789ABCDEF"/></div>
+              <div><label class="fld">AppKey</label><input class="input" name="app_key"/></div>
+            </div>
+            <div class="form-row">
+              <div><label class="fld">Latitude</label><input class="input" name="lat" type="number" step="any"/></div>
+              <div><label class="fld">Longitude</label><input class="input" name="lng" type="number" step="any"/></div>
+            </div>
+            <div class="form-row full"><div>
+              <label class="fld">Description</label>
+              <textarea class="input" name="description" rows="2"></textarea>
+            </div></div>
+            <div style="border-top:1px solid var(--border);margin-top:8px;padding-top:14px;">
+              <label class="fld">Fields (one per line: key,label,unit)</label>
+              <textarea class="input" id="fieldsInput" rows="4" placeholder="temp,Temperature,°C&#10;humidity,Humidity,%"></textarea>
+            </div>
+            <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:14px;">
+              <button class="btn ghost" type="button" id="closeModal">Cancel</button>
+              <button class="btn primary" type="submit">Create device</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    `;
+
+    let devices = [];
+    let filter = 'all', q = '';
+
+    async function load() {
+      const r = await API.get('/api/v1/devices');
+      devices = r.devices;
+      render();
+    }
+    function render() {
+      const tb = document.getElementById('rows');
+      tb.innerHTML = '';
+      const filtered = devices.filter(d => {
+        if (filter !== 'all' && d.protocol !== filter) return false;
+        if (!q) return true;
+        const s = q.toLowerCase();
+        return (d.name + ' ' + d.serial + ' ' + (d.dev_eui||'') + ' ' + (d.tags||''))
+                 .toLowerCase().includes(s);
+      });
+      document.getElementById('count-line').textContent =
+        `${filtered.length} of ${devices.length} devices`;
+      filtered.forEach(d => {
+        const sev = d.online ? 'ok' : 'danger';
+        const tr = document.createElement('tr');
+        tr.style.cursor = 'pointer';
+        tr.innerHTML = `
+          <td><strong>${escapeHTML(d.name)}</strong></td>
+          <td class="cell-mono">${escapeHTML(d.serial)}</td>
+          <td><span class="chip info"><span class="d"></span>${d.protocol.toUpperCase()}</span></td>
+          <td style="color:var(--text-dim);font-size:12px;">${escapeHTML(d.tags || '—')}</td>
+          <td><span class="chip ${sev}"><span class="d"></span>${d.online ? 'ONLINE' : 'OFFLINE'}</span></td>
+          <td class="cell-mono" style="color:var(--text-mute);">${fmtRelative(d.last_seen)}</td>
+          <td><a class="btn ghost" href="/device.html?id=${d.id}">Open →</a></td>`;
+        tr.addEventListener('click', (e) => {
+          if (e.target.tagName === 'A' || e.target.closest('a')) return;
+          location.href = '/device.html?id=' + d.id;
+        });
+        tb.appendChild(tr);
+      });
+    }
+    document.querySelectorAll('[data-filter]').forEach(p => {
+      p.addEventListener('click', () => {
+        document.querySelectorAll('[data-filter]').forEach(x => x.classList.remove('active'));
+        p.classList.add('active'); filter = p.dataset.filter; render();
+      });
+    });
+    document.getElementById('q').addEventListener('input', e => { q = e.target.value; render(); });
+
+    if (editable) {
+      const modal = document.getElementById('modal');
+      const open = () => modal.style.display = 'flex';
+      const close = () => modal.style.display = 'none';
+      document.getElementById('newDev').addEventListener('click', open);
+      document.getElementById('closeModal').addEventListener('click', close);
+      document.getElementById('protoSelect').addEventListener('change', e => {
+        document.getElementById('loraRow').style.display = e.target.value === 'lora' ? '' : 'none';
+      });
+      document.getElementById('newForm').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const f = new FormData(e.target);
+        const data = Object.fromEntries(f);
+        if (data.lat) data.lat = Number(data.lat);
+        if (data.lng) data.lng = Number(data.lng);
+        // Parse fields textarea
+        const fieldsRaw = document.getElementById('fieldsInput').value.trim();
+        const fields = fieldsRaw ? fieldsRaw.split('\n').map(line => {
+          const [key, label, unit] = line.split(',').map(s => s.trim());
+          return key ? { key, label: label || key, unit: unit || '' } : null;
+        }).filter(Boolean) : [];
+        data.fields = fields;
+        try {
+          const r = await API.post('/api/v1/devices', data);
+          close();
+          await load();
+          alert('Device created. Ingest token:\n' + r.device_token);
+        } catch (ex) { alert('Failed: ' + (ex.detail?.error || ex.message)); }
+      });
+    }
+
+    Shell.on(msg => {
+      if (msg.type !== 'telemetry') return;
+      // Subtle row pulse on activity
+      const tr = [...document.querySelectorAll('#rows tr')]
+                 .find(r => r.querySelector('.cell-mono')?.textContent === msg.serial);
+      if (tr) tr.style.background = 'rgba(34,211,238,.06)';
+      setTimeout(() => { if (tr) tr.style.background = ''; }, 800);
+    });
+
+    await load();
+  })();
+</script>
+</body>
+</html>

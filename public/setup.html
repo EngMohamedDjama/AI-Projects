@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>SGTD IIoT Hub — First-run setup</title>
+  <link rel="icon" type="image/svg+xml" href="/assets/img/favicon.svg"/>
+  <link rel="stylesheet" href="/assets/css/style.css"/>
+  <style>
+    .auth-shell {
+      min-height: 100vh; display: grid; place-items: center;
+      padding: 24px;
+    }
+    .auth-card {
+      width: 100%; max-width: 460px;
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 30px;
+      box-shadow: var(--shadow-lg);
+    }
+    .auth-brand {
+      display: flex; align-items: center; gap: 12px;
+      margin-bottom: 20px; padding-bottom: 20px; border-bottom: 1px solid var(--border);
+    }
+    .auth-brand img { height: 44px; }
+    .step-pill {
+      font-size: 10px; letter-spacing: 2px; color: var(--accent-300);
+      font-weight: 700; text-transform: uppercase; padding: 3px 10px;
+      border: 1px solid var(--border-strong); border-radius: 999px;
+    }
+    .auth-card h2 { margin: 0 0 6px; font-size: 22px; }
+    .auth-card .sub { color: var(--text-mute); font-size: 13px; margin-bottom: 22px; }
+    .auth-card .err {
+      background: var(--danger-soft); color: var(--danger);
+      border: 1px solid rgba(239,68,68,.4); border-radius: 8px;
+      padding: 10px 12px; font-size: 12px; margin-bottom: 14px; display: none;
+    }
+    .auth-card .err.show { display: block; }
+  </style>
+</head>
+<body>
+<div class="auth-shell">
+  <div class="auth-card">
+    <div class="auth-brand">
+      <img src="/assets/img/sgtd-logo.svg" alt="SGTD"/>
+      <span class="step-pill">SETUP · STEP 1</span>
+    </div>
+    <h2>Create admin account</h2>
+    <div class="sub">This account will own the workspace and can invite additional users.</div>
+    <div class="err" id="err"></div>
+    <form id="setup">
+      <div class="form-row full"><div>
+        <label class="fld">Workspace name</label>
+        <input class="input" name="workspace" placeholder="SGTD Operations" required/>
+      </div></div>
+      <div class="form-row"><div>
+        <label class="fld">Full name</label>
+        <input class="input" name="name" placeholder="Mohamed Djama" required/>
+      </div><div>
+        <label class="fld">Email</label>
+        <input class="input" name="email" type="email" placeholder="you@sgtd.local" required/>
+      </div></div>
+      <div class="form-row full"><div>
+        <label class="fld">Password (min 8 chars)</label>
+        <input class="input" name="password" type="password" minlength="8" required/>
+      </div></div>
+      <button class="btn primary" type="submit" style="width:100%;justify-content:center;margin-top:8px;">
+        Create admin & enter platform
+      </button>
+    </form>
+  </div>
+</div>
+
+<script src="/assets/js/api.js"></script>
+<script>
+  (async () => {
+    const s = await API.get('/api/v1/status');
+    if (s.initialized) location.href = '/login.html';
+  })();
+
+  document.getElementById('setup').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    const err = document.getElementById('err');
+    err.classList.remove('show');
+    try {
+      const r = await API.post('/api/v1/setup', Object.fromEntries(f));
+      API.setSession(r.token, r.user);
+      location.href = '/';
+    } catch (ex) {
+      err.textContent = ex.detail?.error || ex.message;
+      err.classList.add('show');
+    }
+  });
+</script>
+</body>
+</html>

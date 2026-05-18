@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>SGTD IIoT Hub — Rules</title>
+  <link rel="icon" type="image/svg+xml" href="/assets/img/favicon.svg"/>
+  <link rel="stylesheet" href="/assets/css/style.css"/>
+  <style>
+    .modal { display:none; position:fixed; inset:0; background:rgba(4,12,24,.7); backdrop-filter:blur(6px); z-index:50; align-items:center; justify-content:center; padding:24px; }
+    .modal.open { display:flex; }
+  </style>
+</head>
+<body>
+<script src="/assets/js/api.js"></script>
+<script src="/assets/js/icons.js"></script>
+<script src="/assets/js/layout.js"></script>
+<script>
+  (async () => {
+    await API.guardSetup();
+    const ctx = await Shell.mount({ pageId: 'rules', title: 'Automation Rules' });
+    if (!ctx) return;
+    const editable = ['admin','editor'].includes(ctx.user.role);
+
+    const [rRules, rDevices] = await Promise.all([
+      API.get('/api/v1/rules'),
+      API.get('/api/v1/devices'),
+    ]);
+
+    ctx.content.innerHTML = `
+      <div class="section-title">
+        <h2 id="count">${rRules.rules.length} rules</h2>
+        <div class="actions">
+          ${editable ? '<button class="btn primary" id="newBtn">+ New rule</button>' : ''}
+        </div>
+      </div>
+      <div class="card" style="padding:0;">
+        <div style="max-height:62vh;overflow:auto;">
+          <table class="t">
+            <thead><tr>
+              <th>Name</th><th>Device</th><th>Condition</th>
+              <th>Severity</th><th>Enabled</th><th></th>
+            </tr></thead>
+            <tbody id="rows"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="modal" id="modal">
+        <div class="card" style="width:520px;max-width:100%;max-height:90vh;overflow:auto;">
+          <h3 id="modalTitle">New rule</h3>
+          <form id="ruleForm">
+            <div class="form-row full"><div>
+              <label class="fld">Rule name</label>
+              <input class="input" name="name" required/>
+            </div></div>
+            <div class="form-row">
+              <div><label class="fld">Device (optional — leave blank for all)</label>
+                <select class="input" name="device_id">
+                  <option value="">All devices</option>
+                  ${rDevices.devices.map(d => `<option value="${d.id}">${escapeHTML(d.name)}</option>`).join('')}
+                </select>
+              </div>
+              <div><label class="fld">Field key</label>
+                <input class="input" name="field" placeholder="temp, vib, ppm…" required/>
+              </div>
+            </div>
+            <div class="form-row">
+              <div><label class="fld">Operator</label>
+                <select class="input" name="operator">
+                  <option value="gt">greater than (&gt;)</option>
+                  <option value="gte">≥</option>
+                  <option value="lt">less than (&lt;)</option>
+                  <option value="lte">≤</option>
+                  <option value="eq">=</option>
+                  <option value="neq">≠</option>
+                </select>
+              </div>
+              <div><label class="fld">Threshold</label>
+                <input class="input" name="threshold" type="number" step="any" required/></div>
+            </div>
+            <div class="form-row">
+              <div><label class="fld">Severity</label>
+                <select class="input" name="severity">
+                  <option value="info">info</option>
+                  <option value="warning" selected>warning</option>
+                  <option value="critical">critical</option>
+                </select>
+              </div>
+              <div><label class="fld">Status</label>
+                <select class="input" name="enabled">
+                  <option value="1" selected>Enabled</option>
+                  <option value="0">Disabled</option>
+                </select>
+              </div>
+            </div>
+            <div class="form-row full"><div>
+              <label class="fld">Alert message (optional)</label>
+              <input class="input" name="message" placeholder="Override default alert text"/>
+            </div></div>
+            <div style="display:flex;justify-content:space-between;margin-top:14px;">
+              <button class="btn ghost" type="button" id="delBtn" style="color:var(--danger);display:none;">Delete rule</button>
+              <div style="display:flex;gap:8px;margin-left:auto;">
+                <button class="btn ghost" type="button" id="cancelBtn">Cancel</button>
+                <button class="btn primary" type="submit">Save</button>
+              </div>
+            </div>
+            <input type="hidden" name="id"/>
+          </form>
+        </div>
+      </div>
+    `;
+
+    const rows = document.getElementById('rows');
+    function render(rules) {
+      rows.innerHTML = '';
+      if (!rules.length) {
+        rows.innerHTML = '<tr><td colspan="6" style="color:var(--text-mute);text-align:center;padding:24px;">No rules yet. Create one to start automating.</td></tr>';
+        return;
+      }
+      for (const r of rules) {
+        const dev = rDevices.devices.find(d => d.id === r.device_id);
+        const sev = r.severity === 'critical' ? 'danger' : r.severity === 'warning' ? 'warn' : 'info';
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td><strong>${escapeHTML(r.name)}</strong></td>
+          <td>${dev ? escapeHTML(dev.name) : '<em>All devices</em>'}</td>
+          <td class="cell-mono"><strong>${escapeHTML(r.field)}</strong> ${({gt:'>',gte:'≥',lt:'<',lte:'≤',eq:'=',neq:'≠'})[r.operator]||r.operator} ${r.threshold}</td>
+          <td><span class="chip ${sev}"><span class="d"></span>${r.severity}</span></td>
+          <td>${r.enabled ? '<span class="chip ok"><span class="d"></span>ENABLED</span>' : '<span class="chip danger"><span class="d"></span>DISABLED</span>'}</td>
+          <td style="text-align:right;">${editable ? `<button class="btn ghost" data-edit="${r.id}">Edit</button>` : ''}</td>`;
+        rows.appendChild(tr);
+      }
+      rows.querySelectorAll('[data-edit]').forEach(b => b.addEventListener('click', () => {
+        const r = rules.find(x => x.id === b.dataset.edit);
+        openModal(r);
+      }));
+    }
+
+    const modal = document.getElementById('modal');
+    const form = document.getElementById('ruleForm');
+    function openModal(r) {
+      modal.classList.add('open');
+      document.getElementById('modalTitle').textContent = r ? 'Edit rule' : 'New rule';
+      document.getElementById('delBtn').style.display = r ? '' : 'none';
+      form.reset();
+      if (r) {
+        for (const [k, v] of Object.entries(r)) {
+          const el = form.elements[k];
+          if (el) el.value = v == null ? '' : v;
+        }
+      }
+    }
+    function closeModal() { modal.classList.remove('open'); }
+    if (editable) {
+      document.getElementById('newBtn').addEventListener('click', () => openModal(null));
+    }
+    document.getElementById('cancelBtn').addEventListener('click', closeModal);
+    document.getElementById('delBtn').addEventListener('click', async () => {
+      const id = form.elements.id.value;
+      if (!id || !confirm('Delete this rule?')) return;
+      await API.del('/api/v1/rules/' + id);
+      closeModal(); refresh();
+    });
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const fd = new FormData(form);
+      const data = Object.fromEntries(fd);
+      data.threshold = Number(data.threshold);
+      data.enabled = data.enabled === '1';
+      if (!data.device_id) delete data.device_id;
+      try {
+        if (data.id) {
+          const id = data.id; delete data.id;
+          await API.patch('/api/v1/rules/' + id, data);
+        } else {
+          delete data.id;
+          await API.post('/api/v1/rules', data);
+        }
+        closeModal(); refresh();
+      } catch (ex) { alert('Failed: ' + (ex.detail?.error || ex.message)); }
+    });
+
+    async function refresh() {
+      const r = await API.get('/api/v1/rules');
+      document.getElementById('count').textContent = r.rules.length + ' rule' + (r.rules.length === 1 ? '' : 's');
+      render(r.rules);
+    }
+    render(rRules.rules);
+  })();
+</script>
+</body>
+</html>

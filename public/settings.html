@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>SGTD IIoT Hub — Settings</title>
+  <link rel="icon" type="image/svg+xml" href="/assets/img/favicon.svg"/>
+  <link rel="stylesheet" href="/assets/css/style.css"/>
+</head>
+<body>
+<script src="/assets/js/api.js"></script>
+<script src="/assets/js/icons.js"></script>
+<script src="/assets/js/layout.js"></script>
+<script>
+  (async () => {
+    await API.guardSetup();
+    const ctx = await Shell.mount({ pageId: 'settings', title: 'Account settings' });
+    if (!ctx) return;
+
+    ctx.content.innerHTML = `
+      <div class="grid-12">
+        <div class="card col-6">
+          <h3>${ICONS.cpu} Profile</h3>
+          <form id="profile">
+            <div class="form-row full"><div><label class="fld">Name</label>
+              <input class="input" name="name" value="${escapeHTML(ctx.user.name)}"/></div></div>
+            <div class="form-row full"><div><label class="fld">Email</label>
+              <input class="input" value="${escapeHTML(ctx.user.email)}" disabled/></div></div>
+            <div class="form-row full"><div><label class="fld">Role</label>
+              <input class="input" value="${escapeHTML(ctx.user.role)}" disabled/></div></div>
+            <button class="btn primary" type="submit" style="margin-top:6px;">Save profile</button>
+          </form>
+        </div>
+
+        <div class="card col-6">
+          <h3>${ICONS.bolt} Change password</h3>
+          <form id="pwd">
+            <div class="form-row full"><div><label class="fld">New password (min 8)</label>
+              <input class="input" name="password" type="password" minlength="8" required/></div></div>
+            <div class="form-row full"><div><label class="fld">Confirm new password</label>
+              <input class="input" name="confirm" type="password" minlength="8" required/></div></div>
+            <button class="btn primary" type="submit">Change password</button>
+          </form>
+        </div>
+
+        <div class="card col-12">
+          <h3>${ICONS.signal} Workspace</h3>
+          <div class="form-row">
+            <div><label class="fld">Workspace name</label>
+              <input class="input" value="${escapeHTML(ctx.workspace.name)}" disabled/></div>
+            <div><label class="fld">Slug</label>
+              <input class="input" value="${escapeHTML(ctx.workspace.slug)}" disabled/></div>
+          </div>
+          <p style="color:var(--text-mute);font-size:12px;margin-top:4px;">Contact support to rename your workspace.</p>
+        </div>
+
+        <div class="card col-12">
+          <h3>${ICONS.pulse} Integrations</h3>
+          <table class="t">
+            <tr><th>MQTT broker</th>
+                <td class="cell-mono">mqtt://${location.hostname}:1883</td>
+                <td>Authenticate with device serial + device token</td></tr>
+            <tr><th>HTTP ingestion</th>
+                <td class="cell-mono">${location.origin}/api/v1/ingest</td>
+                <td>Bearer device token</td></tr>
+            <tr><th>LoRaWAN webhook</th>
+                <td class="cell-mono">${location.origin}/api/v1/integrations/lorawan</td>
+                <td>ChirpStack-compatible JSON</td></tr>
+          </table>
+        </div>
+      </div>
+    `;
+
+    document.getElementById('profile').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const data = Object.fromEntries(new FormData(e.target));
+      try {
+        await API.patch('/api/v1/auth/profile', data);
+        const u = { ...ctx.user, name: data.name };
+        API.setSession(API.token(), u);
+        alert('Saved.');
+      } catch (ex) { alert('Failed: ' + (ex.detail?.error || ex.message)); }
+    });
+
+    document.getElementById('pwd').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const data = Object.fromEntries(new FormData(e.target));
+      if (data.password !== data.confirm) { alert('Passwords do not match.'); return; }
+      try {
+        await API.patch('/api/v1/auth/profile', { password: data.password });
+        alert('Password changed.');
+        e.target.reset();
+      } catch (ex) { alert('Failed: ' + (ex.detail?.error || ex.message)); }
+    });
+  })();
+</script>
+</body>
+</html>

@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>SGTD IIoT Hub — Dashboards</title>
+  <link rel="icon" type="image/svg+xml" href="/assets/img/favicon.svg"/>
+  <link rel="stylesheet" href="/assets/css/style.css"/>
+</head>
+<body>
+<script src="/assets/js/api.js"></script>
+<script src="/assets/js/icons.js"></script>
+<script src="/assets/js/layout.js"></script>
+<script>
+  (async () => {
+    await API.guardSetup();
+    const ctx = await Shell.mount({ pageId: 'dashboards', title: 'Dashboards' });
+    if (!ctx) return;
+    const editable = ['admin','editor'].includes(ctx.user.role);
+    ctx.content.innerHTML = `
+      <div class="section-title">
+        <h2 id="count">Dashboards</h2>
+        <div class="actions">
+          ${editable ? '<button class="btn primary" id="newBtn">+ New dashboard</button>' : ''}
+        </div>
+      </div>
+      <div id="grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:16px;"></div>
+    `;
+
+    async function load() {
+      const r = await API.get('/api/v1/dashboards');
+      const grid = document.getElementById('grid');
+      grid.innerHTML = '';
+      document.getElementById('count').textContent = r.dashboards.length + ' dashboard' + (r.dashboards.length === 1 ? '' : 's');
+      for (const d of r.dashboards) {
+        const c = document.createElement('a');
+        c.href = '/dashboard.html?id=' + d.id;
+        c.className = 'card';
+        c.style.cssText = 'text-decoration:none;color:inherit;transition:all .2s;display:block;';
+        c.innerHTML = `
+          <div style="display:flex;align-items:center;gap:10px;">
+            ${ICONS.analytics}
+            <strong style="font-size:15px;">${escapeHTML(d.name)}</strong>
+            ${d.is_default ? '<span class="chip info" style="margin-left:auto;"><span class="d"></span>DEFAULT</span>' : ''}
+          </div>
+          <p style="color:var(--text-mute);font-size:13px;margin:10px 0 0;">${escapeHTML(d.description || 'No description')}</p>
+          <div style="color:var(--text-mute);font-size:11px;margin-top:14px;">Updated ${fmtRelative(d.updated_at)}</div>
+        `;
+        c.addEventListener('mouseenter', () => c.style.borderColor = 'var(--accent-400)');
+        c.addEventListener('mouseleave', () => c.style.borderColor = '');
+        grid.appendChild(c);
+      }
+    }
+    if (editable) {
+      document.getElementById('newBtn').addEventListener('click', async () => {
+        const name = prompt('Dashboard name'); if (!name) return;
+        const r = await API.post('/api/v1/dashboards', { name, layout: [] });
+        location.href = '/dashboard.html?id=' + r.id + '&edit=1';
+      });
+    }
+    await load();
+  })();
+</script>
+</body>
+</html>

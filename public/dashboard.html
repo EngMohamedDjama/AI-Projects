@@ -1,0 +1,365 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>SGTD IIoT Hub — Dashboard</title>
+  <link rel="icon" type="image/svg+xml" href="/assets/img/favicon.svg"/>
+  <link rel="stylesheet" href="/assets/css/style.css"/>
+  <script src="/assets/vendor/chart.umd.js"></script>
+  <style>
+    .dash-grid {
+      display: grid; grid-template-columns: repeat(12, minmax(0, 1fr));
+      grid-auto-rows: 80px; gap: 12px;
+    }
+    .dash-tile {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 14px;
+      position: relative; overflow: hidden;
+      box-shadow: var(--shadow);
+    }
+    .dash-tile.editing { border-color: var(--accent-400); cursor: move; }
+    .dash-tile .tile-actions {
+      position: absolute; top: 6px; right: 6px;
+      display: none; gap: 4px; z-index: 2;
+    }
+    .dash-tile.editing .tile-actions { display: flex; }
+    .tile-actions button {
+      background: var(--surface-3); border: 1px solid var(--border);
+      color: var(--text-dim); padding: 4px 8px; border-radius: 6px;
+      font-size: 11px; cursor: pointer;
+    }
+    .add-widget-panel {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 16px; margin-bottom: 14px;
+    }
+    .widget-list {
+      display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+      gap: 10px; margin-top: 12px;
+    }
+    .widget-tile {
+      background: var(--surface-2); border: 1px solid var(--border);
+      padding: 12px; border-radius: 10px; cursor: pointer; text-align: center;
+      transition: all .15s;
+    }
+    .widget-tile:hover { border-color: var(--accent-400); color: var(--accent-300); }
+    .modal {
+      display: none; position: fixed; inset: 0;
+      background: rgba(4,12,24,.7); backdrop-filter: blur(6px);
+      z-index: 50; align-items: center; justify-content: center; padding: 24px;
+    }
+    .modal.open { display: flex; }
+    .modal-card {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 22px; width: 520px; max-width: 100%;
+      max-height: 90vh; overflow: auto;
+    }
+  </style>
+</head>
+<body>
+<script src="/assets/js/api.js"></script>
+<script src="/assets/js/icons.js"></script>
+<script src="/assets/js/charts.js"></script>
+<script src="/assets/js/layout.js"></script>
+<script src="/assets/js/widgets.js"></script>
+<script>
+  (async () => {
+    await API.guardSetup();
+    const params = new URLSearchParams(location.search);
+    const id = params.get('id');
+    let editMode = params.get('edit') === '1';
+    if (!id) { location.href = '/dashboards.html'; return; }
+
+    const ctx = await Shell.mount({ pageId: 'dashboards', title: 'Dashboard' });
+    if (!ctx) return;
+    const editable = ['admin','editor'].includes(ctx.user.role);
+
+    // Load dashboard + context data
+    const [dashRes, devRes, metricsRes] = await Promise.all([
+      API.get('/api/v1/dashboards/' + id),
+      API.get('/api/v1/devices'),
+      API.get('/api/v1/metrics/overview'),
+    ]);
+    const dashboard = dashRes.dashboard;
+    const devices = devRes.devices;
+    document.querySelector('.topbar h1').textContent = dashboard.name;
+
+    // Build initial state from latest values per device
+    const stateMap = {};
+    const stateProm = devices.slice(0, 30).map(async d => {
+      try {
+        const r = await API.get('/api/v1/devices/' + d.id);
+        stateMap[d.id] = {};
+        for (const s of r.state) stateMap[d.id][s.field] = s;
+      } catch {}
+    });
+    await Promise.all(stateProm);
+
+    // Telemetry pub-sub for widgets
+    const subs = new Set();
+    function onTelemetry(fn) { subs.add(fn); return () => subs.delete(fn); }
+    Shell.on(msg => {
+      if (msg.type === 'telemetry') {
+        stateMap[msg.device_id] = stateMap[msg.device_id] || {};
+        for (const [k, v] of Object.entries(msg.fields)) {
+          stateMap[msg.device_id][k] = { value_num: typeof v === 'number' ? v : null, value_str: typeof v === 'string' ? v : null, ts: msg.ts };
+        }
+      }
+      subs.forEach(fn => fn(msg));
+    });
+
+    const deviceOptions = devices.map(d => ({ value: d.id, label: `${d.name} (${d.serial})` }));
+    const statSources = [
+      { value: 'metric:devices_online', label: 'Metric · devices online' },
+      { value: 'metric:devices',        label: 'Metric · total devices' },
+      { value: 'metric:alerts_open',    label: 'Metric · open alerts' },
+      { value: 'metric:rules_active',   label: 'Metric · active rules' },
+      { value: 'metric:msgs_per_minute', label: 'Metric · messages/min' },
+      { value: 'metric:dashboards',     label: 'Metric · dashboards' },
+      { value: 'metric:users',          label: 'Metric · users' },
+    ];
+    // Add per-device-field stat sources
+    for (const d of devices) {
+      try {
+        const r = await API.get('/api/v1/devices/' + d.id);
+        for (const f of r.fields) {
+          statSources.push({ value: `device:${d.id}:${f.key}`, label: `${d.name} · ${f.label || f.key}` });
+        }
+      } catch {}
+      if (statSources.length > 60) break;
+    }
+    const widgetCtx = {
+      devices, deviceOptions, statSources,
+      state: stateMap,
+      metrics: {
+        devices: metricsRes.totals.devices,
+        devices_online: metricsRes.totals.online,
+        alerts_open: metricsRes.totals.alerts_open,
+        rules_active: metricsRes.totals.rules_active,
+        msgs_per_minute: metricsRes.totals.msgs_per_minute,
+        dashboards: metricsRes.totals.dashboards,
+        users: metricsRes.totals.users,
+      },
+      onTelemetry,
+    };
+    // Refresh metric counters periodically
+    setInterval(async () => {
+      try {
+        const m = await API.get('/api/v1/metrics/overview');
+        widgetCtx.metrics.devices = m.totals.devices;
+        widgetCtx.metrics.devices_online = m.totals.online;
+        widgetCtx.metrics.alerts_open = m.totals.alerts_open;
+        widgetCtx.metrics.rules_active = m.totals.rules_active;
+        widgetCtx.metrics.msgs_per_minute = m.totals.msgs_per_minute;
+      } catch {}
+    }, 10_000);
+
+    // ---------- Render dashboard ----------
+    const layout = dashboard.layout || [];
+    const destroyers = new Map();
+
+    ctx.content.innerHTML = `
+      <div class="section-title">
+        <h2 id="title">${escapeHTML(dashboard.name)}</h2>
+        <div class="actions">
+          <a class="btn ghost" href="/dashboards.html">← All dashboards</a>
+          ${editable ? `<button class="btn ${editMode?'primary':'ghost'}" id="editBtn">${editMode?'Save & exit edit':'Edit'}</button>` : ''}
+        </div>
+      </div>
+      <div id="addPanel" class="add-widget-panel" style="display:none;">
+        <strong>Add a widget</strong>
+        <div class="widget-list" id="widgetList"></div>
+      </div>
+      <div class="dash-grid" id="grid"></div>
+
+      <div class="modal" id="cfgModal">
+        <div class="modal-card">
+          <h3 style="margin-bottom:14px;">Configure widget</h3>
+          <form id="cfgForm"></form>
+          <div style="display:flex;justify-content:space-between;margin-top:16px;">
+            <button class="btn ghost" id="cfgDelete" style="color:var(--danger);">Delete widget</button>
+            <div style="display:flex;gap:8px;">
+              <button class="btn ghost" id="cfgCancel">Cancel</button>
+              <button class="btn primary" id="cfgSave">Save</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+    const grid = document.getElementById('grid');
+
+    function renderAll() {
+      destroyers.forEach(fn => { try { fn(); } catch {} });
+      destroyers.clear();
+      grid.innerHTML = '';
+      for (const w of layout) renderWidget(w);
+    }
+
+    function renderWidget(w) {
+      const t = document.createElement('div');
+      t.className = 'dash-tile' + (editMode ? ' editing' : '');
+      t.style.gridColumn = `${(w.x || 0) + 1} / span ${w.w || 4}`;
+      t.style.gridRow    = `${(w.y || 0) + 1} / span ${w.h || 2}`;
+      t.dataset.id = w.id;
+      t.innerHTML = `
+        <div class="tile-actions">
+          <button data-act="cfg">⚙</button>
+          <button data-act="up">↑</button>
+          <button data-act="down">↓</button>
+          <button data-act="del">×</button>
+        </div>
+        <div data-body style="height:100%;"></div>
+      `;
+      grid.appendChild(t);
+      const def = Widgets[w.type];
+      if (!def) {
+        t.querySelector('[data-body]').innerHTML =
+          `<div style="color:var(--danger);padding:14px;">Unknown widget: ${escapeHTML(w.type)}</div>`;
+        return;
+      }
+      try {
+        const destroy = def.render(t.querySelector('[data-body]'), w.config || {}, widgetCtx);
+        destroyers.set(w.id, destroy);
+      } catch (e) {
+        t.querySelector('[data-body]').innerHTML =
+          `<div style="color:var(--danger);padding:14px;font-size:12px;">Widget error: ${escapeHTML(e.message)}</div>`;
+      }
+      t.querySelectorAll('[data-act]').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const act = btn.dataset.act;
+          if (act === 'del') deleteWidget(w.id);
+          if (act === 'cfg') openConfig(w.id);
+          if (act === 'up') moveWidget(w.id, -1);
+          if (act === 'down') moveWidget(w.id, +1);
+        });
+      });
+    }
+
+    function deleteWidget(wid) {
+      if (!confirm('Remove this widget?')) return;
+      const i = layout.findIndex(w => w.id === wid);
+      if (i >= 0) layout.splice(i, 1);
+      renderAll();
+    }
+    function moveWidget(wid, delta) {
+      const i = layout.findIndex(w => w.id === wid);
+      const j = i + delta;
+      if (i < 0 || j < 0 || j >= layout.length) return;
+      [layout[i], layout[j]] = [layout[j], layout[i]];
+      renderAll();
+    }
+
+    // ---------- Add panel & config modal ----------
+    function uidWidget(p='w_') { return p + Math.random().toString(36).slice(2, 10); }
+    const widgetList = document.getElementById('widgetList');
+    for (const [type, def] of Object.entries(Widgets)) {
+      const btn = document.createElement('div');
+      btn.className = 'widget-tile';
+      btn.innerHTML = `<strong>${escapeHTML(def.label)}</strong><div style="font-size:11px;color:var(--text-mute);text-transform:uppercase;margin-top:4px;letter-spacing:1.5px;">${escapeHTML(type)}</div>`;
+      btn.addEventListener('click', () => {
+        const defaults = {};
+        for (const f of def.schema(widgetCtx)) if (f.default != null) defaults[f.key] = f.default;
+        // Place at bottom
+        const maxY = layout.reduce((m, w) => Math.max(m, (w.y || 0) + (w.h || 2)), 0);
+        const w = { id: uidWidget(), type, x: 0, y: maxY, w: 4, h: 3, config: defaults };
+        layout.push(w);
+        renderAll();
+        openConfig(w.id);
+      });
+      widgetList.appendChild(btn);
+    }
+
+    const cfgModal = document.getElementById('cfgModal');
+    let editingId = null;
+    function openConfig(wid) {
+      const w = layout.find(x => x.id === wid);
+      if (!w) return;
+      editingId = wid;
+      const def = Widgets[w.type];
+      const schema = def.schema(widgetCtx);
+      const form = document.getElementById('cfgForm');
+      form.innerHTML = '';
+      // size controls
+      form.innerHTML += `
+        <div class="form-row">
+          <div><label class="fld">Width (cols)</label>
+            <input class="input" name="__w" type="number" min="1" max="12" value="${w.w || 4}"/></div>
+          <div><label class="fld">Height (rows)</label>
+            <input class="input" name="__h" type="number" min="1" max="12" value="${w.h || 3}"/></div>
+        </div>
+      `;
+      for (const f of schema) {
+        const v = w.config?.[f.key] ?? f.default ?? '';
+        let input = '';
+        if (f.type === 'select') {
+          input = `<select class="input" name="${f.key}">` +
+            f.options.map(o => `<option value="${escapeHTML(o.value)}" ${o.value === v ? 'selected' : ''}>${escapeHTML(o.label)}</option>`).join('') +
+            '</select>';
+        } else if (f.type === 'number') {
+          input = `<input class="input" name="${f.key}" type="number" value="${escapeHTML(v)}"/>`;
+        } else {
+          input = `<input class="input" name="${f.key}" value="${escapeHTML(v)}"/>`;
+        }
+        form.innerHTML += `<div class="form-row full"><div><label class="fld">${escapeHTML(f.label)}</label>${input}${f.help ? `<div style="font-size:11px;color:var(--text-mute);margin-top:4px;">${escapeHTML(f.help)}</div>` : ''}</div></div>`;
+      }
+      cfgModal.classList.add('open');
+    }
+    document.getElementById('cfgCancel').addEventListener('click', () => cfgModal.classList.remove('open'));
+    document.getElementById('cfgSave').addEventListener('click', () => {
+      const w = layout.find(x => x.id === editingId);
+      if (!w) return;
+      const form = document.getElementById('cfgForm');
+      const fd = new FormData(form);
+      const cfg = {};
+      for (const [k, v] of fd.entries()) {
+        if (k === '__w') w.w = Math.min(12, Math.max(1, Number(v))) || 4;
+        else if (k === '__h') w.h = Math.max(1, Number(v)) || 3;
+        else cfg[k] = v;
+      }
+      // Coerce numeric fields
+      const def = Widgets[w.type];
+      for (const f of def.schema(widgetCtx)) {
+        if (f.type === 'number' && cfg[f.key] !== undefined && cfg[f.key] !== '') {
+          cfg[f.key] = Number(cfg[f.key]);
+        }
+      }
+      w.config = cfg;
+      cfgModal.classList.remove('open');
+      renderAll();
+    });
+    document.getElementById('cfgDelete').addEventListener('click', () => {
+      deleteWidget(editingId); cfgModal.classList.remove('open');
+    });
+
+    // Edit mode toggle
+    if (editable) {
+      document.getElementById('editBtn').addEventListener('click', async () => {
+        if (editMode) {
+          // Save
+          try {
+            await API.put('/api/v1/dashboards/' + id, { layout });
+            editMode = false;
+            document.getElementById('addPanel').style.display = 'none';
+            document.getElementById('editBtn').textContent = 'Edit';
+            document.getElementById('editBtn').classList.remove('primary');
+            document.getElementById('editBtn').classList.add('ghost');
+            grid.querySelectorAll('.dash-tile').forEach(t => t.classList.remove('editing'));
+          } catch (e) { alert('Save failed: ' + (e.detail?.error || e.message)); }
+        } else {
+          editMode = true;
+          document.getElementById('addPanel').style.display = '';
+          document.getElementById('editBtn').textContent = 'Save & exit edit';
+          document.getElementById('editBtn').classList.add('primary');
+          document.getElementById('editBtn').classList.remove('ghost');
+          grid.querySelectorAll('.dash-tile').forEach(t => t.classList.add('editing'));
+        }
+      });
+      if (editMode) document.getElementById('addPanel').style.display = '';
+    }
+
+    renderAll();
+  })();
+</script>
+</body>
+</html>

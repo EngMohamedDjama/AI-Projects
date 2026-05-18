@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>SGTD IIoT Hub — Users</title>
+  <link rel="icon" type="image/svg+xml" href="/assets/img/favicon.svg"/>
+  <link rel="stylesheet" href="/assets/css/style.css"/>
+  <style>.modal{display:none;position:fixed;inset:0;background:rgba(4,12,24,.7);backdrop-filter:blur(6px);z-index:50;align-items:center;justify-content:center;padding:24px;}.modal.open{display:flex;}</style>
+</head>
+<body>
+<script src="/assets/js/api.js"></script>
+<script src="/assets/js/icons.js"></script>
+<script src="/assets/js/layout.js"></script>
+<script>
+  (async () => {
+    await API.guardSetup();
+    const ctx = await Shell.mount({ pageId: 'users', title: 'Users', requireRole: 'admin' });
+    if (!ctx) return;
+
+    ctx.content.innerHTML = `
+      <div class="section-title">
+        <h2 id="count">Users</h2>
+        <div class="actions">
+          <button class="btn primary" id="newBtn">+ Invite user</button>
+        </div>
+      </div>
+      <div class="card" style="padding:0;">
+        <table class="t">
+          <thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Created</th><th>Last login</th><th></th></tr></thead>
+          <tbody id="rows"></tbody>
+        </table>
+      </div>
+
+      <div class="modal" id="modal">
+        <div class="card" style="width:480px;">
+          <h3 id="modalTitle">Invite user</h3>
+          <form id="userForm">
+            <div class="form-row">
+              <div><label class="fld">Name</label><input class="input" name="name" required/></div>
+              <div><label class="fld">Email</label><input class="input" name="email" type="email" required/></div>
+            </div>
+            <div class="form-row">
+              <div><label class="fld">Role</label>
+                <select class="input" name="role">
+                  <option value="viewer">Viewer (read only)</option>
+                  <option value="editor">Editor (manage devices & dashboards)</option>
+                  <option value="admin">Admin (full access)</option>
+                </select>
+              </div>
+              <div><label class="fld">Temporary password</label>
+                <input class="input" name="password" type="text" minlength="8" required value=""/></div>
+            </div>
+            <input type="hidden" name="id"/>
+            <div style="display:flex;justify-content:space-between;margin-top:14px;">
+              <button class="btn ghost" type="button" id="delBtn" style="color:var(--danger);display:none;">Remove user</button>
+              <div style="display:flex;gap:8px;margin-left:auto;">
+                <button class="btn ghost" type="button" id="cancelBtn">Cancel</button>
+                <button class="btn primary" type="submit">Save</button>
+              </div>
+            </div>
+          </form>
+        </div>
+      </div>
+    `;
+
+    async function load() {
+      const r = await API.get('/api/v1/users');
+      document.getElementById('count').textContent = r.users.length + ' user' + (r.users.length===1?'':'s');
+      const tb = document.getElementById('rows');
+      tb.innerHTML = '';
+      for (const u of r.users) {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td><strong>${escapeHTML(u.name)}</strong></td>
+          <td class="cell-mono">${escapeHTML(u.email)}</td>
+          <td><span class="chip ${u.role==='admin'?'danger':u.role==='editor'?'warn':'info'}"><span class="d"></span>${u.role.toUpperCase()}</span></td>
+          <td>${new Date(u.created_at).toLocaleDateString()}</td>
+          <td class="cell-mono" style="color:var(--text-mute);">${u.last_login ? fmtRelative(u.last_login) : 'never'}</td>
+          <td style="text-align:right;">${u.id === ctx.user.id ? '<span style="color:var(--text-mute);font-size:12px;">you</span>' : `<button class="btn ghost" data-edit="${u.id}">Edit</button>`}</td>`;
+        tb.appendChild(tr);
+      }
+      tb.querySelectorAll('[data-edit]').forEach(b => b.addEventListener('click', () => {
+        const u = r.users.find(x => x.id === b.dataset.edit);
+        openModal(u);
+      }));
+    }
+
+    const modal = document.getElementById('modal');
+    const form = document.getElementById('userForm');
+    function openModal(u) {
+      modal.classList.add('open');
+      document.getElementById('modalTitle').textContent = u ? 'Edit user' : 'Invite user';
+      document.getElementById('delBtn').style.display = u ? '' : 'none';
+      form.reset();
+      if (u) {
+        form.elements.id.value = u.id;
+        form.elements.name.value = u.name;
+        form.elements.email.value = u.email;
+        form.elements.role.value = u.role;
+        form.elements.email.disabled = true;
+        form.elements.password.required = false;
+        form.elements.password.placeholder = 'Leave blank to keep current';
+      } else {
+        form.elements.email.disabled = false;
+        form.elements.password.required = true;
+        form.elements.password.value = crypto.getRandomValues(new Uint32Array(2)).join('-');
+      }
+    }
+    function closeModal() { modal.classList.remove('open'); }
+    document.getElementById('newBtn').addEventListener('click', () => openModal(null));
+    document.getElementById('cancelBtn').addEventListener('click', closeModal);
+    document.getElementById('delBtn').addEventListener('click', async () => {
+      const id = form.elements.id.value;
+      if (!id || !confirm('Remove this user?')) return;
+      await API.del('/api/v1/users/' + id);
+      closeModal(); load();
+    });
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const data = Object.fromEntries(new FormData(form));
+      try {
+        if (data.id) {
+          const id = data.id;
+          const patch = { role: data.role, name: data.name };
+          if (data.password) patch.password = data.password;
+          await API.patch('/api/v1/users/' + id, patch);
+        } else {
+          await API.post('/api/v1/users', data);
+        }
+        closeModal(); load();
+      } catch (ex) { alert('Failed: ' + (ex.detail?.error || ex.message)); }
+    });
+
+    load();
+  })();
+</script>
+</body>
+</html>

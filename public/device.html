@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>SGTD IIoT Hub — Device</title>
+  <link rel="icon" type="image/svg+xml" href="/assets/img/favicon.svg"/>
+  <link rel="stylesheet" href="/assets/css/style.css"/>
+  <script src="/assets/vendor/chart.umd.js"></script>
+</head>
+<body>
+<script src="/assets/js/api.js"></script>
+<script src="/assets/js/icons.js"></script>
+<script src="/assets/js/charts.js"></script>
+<script src="/assets/js/layout.js"></script>
+<script>
+  (async () => {
+    await API.guardSetup();
+    const id = new URLSearchParams(location.search).get('id');
+    if (!id) { location.href = '/devices.html'; return; }
+    const ctx = await Shell.mount({ pageId: 'devices', title: 'Device', crumb: 'SGTD · Devices' });
+    if (!ctx) return;
+    const editable = ['admin','editor'].includes(ctx.user.role);
+
+    async function load() {
+      try { return await API.get('/api/v1/devices/' + id); }
+      catch { location.href = '/devices.html'; return null; }
+    }
+    const d = await load();
+    if (!d) return;
+    const { device, fields, state } = d;
+    document.querySelector('.topbar h1').textContent = device.name;
+    const stateByKey = Object.fromEntries(state.map(s => [s.field, s]));
+
+    ctx.content.innerHTML = `
+      <div class="grid-12">
+        <div class="card col-8">
+          <h3>${ICONS.cpu} ${escapeHTML(device.name)}
+            <span class="meta">
+              <span class="chip ${device.online ? 'ok' : 'danger'}"><span class="d"></span>${device.online ? 'ONLINE' : 'OFFLINE'}</span>
+              <span class="chip info" style="margin-left:6px;"><span class="d"></span>${device.protocol.toUpperCase()}</span>
+            </span>
+          </h3>
+          <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px;margin-top:10px;" id="valueTiles"></div>
+        </div>
+
+        <div class="card col-4">
+          <h3>Device info</h3>
+          <table class="t">
+            <tr><th>Serial</th><td class="cell-mono">${escapeHTML(device.serial)}</td></tr>
+            <tr><th>Created</th><td>${new Date(device.created_at).toLocaleString()}</td></tr>
+            <tr><th>Last seen</th><td>${fmtRelative(device.last_seen)}</td></tr>
+            <tr><th>Tags</th><td>${escapeHTML(device.tags || '—')}</td></tr>
+            ${device.dev_eui ? `<tr><th>DevEUI</th><td class="cell-mono">${escapeHTML(device.dev_eui)}</td></tr>` : ''}
+            ${device.lat ? `<tr><th>Location</th><td class="cell-mono">${device.lat.toFixed(4)}, ${device.lng.toFixed(4)}</td></tr>` : ''}
+          </table>
+          ${device.description ? `<p style="margin-top:14px;color:var(--text-dim);font-size:13px;">${escapeHTML(device.description)}</p>` : ''}
+        </div>
+
+        <div class="card col-12">
+          <h3>${ICONS.pulse} History
+            <span class="meta">
+              <span class="pill active" data-range="1h">1H</span>
+              <span class="pill" data-range="6h">6H</span>
+              <span class="pill" data-range="24h">24H</span>
+              <span class="pill" data-range="7d">7D</span>
+            </span>
+          </h3>
+          <div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap;" id="fieldPicker"></div>
+          <div class="chart-wrap lg"><canvas id="histChart"></canvas></div>
+        </div>
+
+        <div class="card col-12">
+          <h3>${ICONS.bolt} Integration
+            <span class="meta">how to send data to this device</span>
+          </h3>
+          <div id="integration"></div>
+        </div>
+      </div>
+    `;
+
+    // Value tiles
+    const tiles = document.getElementById('valueTiles');
+    for (const f of fields) {
+      const s = stateByKey[f.key];
+      const tile = document.createElement('div');
+      tile.style.cssText = 'background:var(--surface-2);border:1px solid var(--border);border-radius:10px;padding:14px;';
+      tile.dataset.key = f.key;
+      tile.innerHTML = `
+        <div style="font-size:10px;letter-spacing:1.5px;text-transform:uppercase;color:var(--text-mute);font-weight:600;">${escapeHTML(f.label)}</div>
+        <div style="font-family:var(--mono);font-size:24px;color:var(--text);margin-top:6px;" data-val>${s ? (s.value_num != null ? s.value_num.toFixed(f.decimals || 2) : escapeHTML(s.value_str || '—')) : '—'} <span style="font-size:11px;color:var(--text-mute);">${escapeHTML(f.unit || '')}</span></div>
+        <div style="font-size:11px;color:var(--text-mute);margin-top:4px;" data-time>${s ? fmtRelative(s.ts) : 'no data yet'}</div>`;
+      tiles.appendChild(tile);
+    }
+
+    // Field picker chips
+    const picker = document.getElementById('fieldPicker');
+    let activeField = fields[0]?.key;
+    let activeRange = '1h';
+    for (const f of fields) {
+      const chip = document.createElement('span');
+      chip.className = 'pill' + (f.key === activeField ? ' active' : '');
+      chip.textContent = f.label;
+      chip.addEventListener('click', () => {
+        document.querySelectorAll('#fieldPicker .pill').forEach(c => c.classList.remove('active'));
+        chip.classList.add('active'); activeField = f.key; renderHistory();
+      });
+      picker.appendChild(chip);
+    }
+    document.querySelectorAll('[data-range]').forEach(p => {
+      p.addEventListener('click', () => {
+        document.querySelectorAll('[data-range]').forEach(x => x.classList.remove('active'));
+        p.classList.add('active'); activeRange = p.dataset.range; renderHistory();
+      });
+    });
+
+    const rangeMs = { '1h': 3600_000, '6h': 6*3600_000, '24h': 86400_000, '7d': 7*86400_000 };
+    let chart;
+    async function renderHistory() {
+      if (!activeField) return;
+      const r = await API.get(`/api/v1/devices/${id}/history?field=${encodeURIComponent(activeField)}&from=${Date.now() - rangeMs[activeRange]}`);
+      const labels = r.rows.map(row => {
+        const d = new Date(row.ts);
+        return activeRange === '1h' || activeRange === '6h'
+          ? d.toTimeString().slice(0,5) : d.toLocaleDateString() + ' ' + d.toTimeString().slice(0,5);
+      });
+      const data = r.rows.map(row => row.value_num);
+      if (chart) chart.destroy();
+      chart = timeSeries(document.getElementById('histChart'), labels,
+        [{ label: activeField, data }]);
+    }
+    if (activeField) renderHistory();
+
+    // Integration snippets
+    const origin = location.origin;
+    const integration = document.getElementById('integration');
+    const tokenPart = device.device_token
+      ? `<div style="background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.3);padding:10px 12px;border-radius:8px;font-family:var(--mono);font-size:12px;margin-bottom:14px;">
+           <strong style="color:var(--warn);">Device token (keep secret):</strong> ${escapeHTML(device.device_token)}
+         </div>`
+      : '<p style="color:var(--text-mute);">Ask an admin for the device token.</p>';
+    if (device.protocol === 'http') {
+      integration.innerHTML = tokenPart + `
+        <p style="color:var(--text-dim);margin-bottom:8px;">POST telemetry as JSON:</p>
+        <pre style="background:var(--surface-3);border:1px solid var(--border);padding:14px;border-radius:8px;font-family:var(--mono);font-size:12px;overflow:auto;">curl -X POST ${origin}/api/v1/ingest \\
+  -H "Authorization: Bearer ${device.device_token || '&lt;device_token&gt;'}" \\
+  -H "Content-Type: application/json" \\
+  -d '${JSON.stringify(fields.reduce((acc, f) => (acc[f.key] = 0, acc), {}))}'</pre>`;
+    } else if (device.protocol === 'mqtt') {
+      integration.innerHTML = tokenPart + `
+        <p style="color:var(--text-dim);margin-bottom:8px;">Connect to the broker and publish:</p>
+        <pre style="background:var(--surface-3);border:1px solid var(--border);padding:14px;border-radius:8px;font-family:var(--mono);font-size:12px;overflow:auto;">Host:     ${location.hostname}
+Port:     1883 (TCP) — TLS in production
+Username: ${device.serial}
+Password: ${device.device_token || '&lt;device_token&gt;'}
+
+# Per-field topic
+mosquitto_pub -h ${location.hostname} -u ${device.serial} -P ${device.device_token || '...'} \\
+  -t sgtd/${device.serial}/${fields[0]?.key || 'value'} -m 42.7
+
+# Or full JSON frame
+mosquitto_pub -h ${location.hostname} -u ${device.serial} -P ${device.device_token || '...'} \\
+  -t sgtd/${device.serial} -m '${JSON.stringify(fields.reduce((acc, f) => (acc[f.key] = 0, acc), {}))}'</pre>`;
+    } else {
+      integration.innerHTML = tokenPart + `
+        <p style="color:var(--text-dim);margin-bottom:8px;">Point your LoRaWAN network server's HTTP integration at:</p>
+        <pre style="background:var(--surface-3);border:1px solid var(--border);padding:14px;border-radius:8px;font-family:var(--mono);font-size:12px;overflow:auto;">${origin}/api/v1/integrations/lorawan
+
+# Compatible with ChirpStack v4 HTTP integration.
+# The platform matches devices by devEUI (case-insensitive).</pre>`;
+    }
+
+    // Edit / delete buttons
+    if (editable) {
+      const actions = document.createElement('div');
+      actions.style.cssText = 'display:flex;gap:8px;margin-top:16px;';
+      actions.innerHTML = `
+        <button class="btn ghost" id="renameBtn">Rename</button>
+        ${ctx.user.role === 'admin' ? '<button class="btn ghost" id="deleteBtn" style="color:var(--danger);border-color:rgba(239,68,68,.3);">Delete</button>' : ''}
+      `;
+      ctx.content.querySelector('.card.col-4').appendChild(actions);
+      document.getElementById('renameBtn').addEventListener('click', async () => {
+        const n = prompt('New name', device.name); if (!n) return;
+        await API.patch('/api/v1/devices/' + id, { name: n });
+        location.reload();
+      });
+      const delBtn = document.getElementById('deleteBtn');
+      if (delBtn) delBtn.addEventListener('click', async () => {
+        if (!confirm('Delete this device and all its history?')) return;
+        await API.del('/api/v1/devices/' + id);
+        location.href = '/devices.html';
+      });
+    }
+
+    // Live tile updates
+    Shell.on(msg => {
+      if (msg.type !== 'telemetry' || msg.device_id !== id) return;
+      for (const [k, v] of Object.entries(msg.fields)) {
+        const tile = document.querySelector(`[data-key="${k}"]`);
+        if (!tile) continue;
+        const valEl = tile.querySelector('[data-val]');
+        const unit = tile.querySelector('[data-val] span')?.outerHTML || '';
+        valEl.innerHTML = `${typeof v === 'number' ? v.toFixed(2) : escapeHTML(String(v))} ${unit}`;
+        tile.querySelector('[data-time]').textContent = 'just now';
+        tile.style.borderColor = 'var(--accent-400)';
+        setTimeout(() => tile.style.borderColor = '', 700);
+        if (k === activeField && chart) {
+          chart.data.labels.push(new Date(msg.ts).toTimeString().slice(0,5));
+          chart.data.datasets[0].data.push(v);
+          if (chart.data.labels.length > 200) { chart.data.labels.shift(); chart.data.datasets[0].data.shift(); }
+          chart.update('none');
+        }
+      }
+    });
+  })();
+</script>
+</body>
+</html>

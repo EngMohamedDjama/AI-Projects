@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>SGTD IIoT Hub — Sign in</title>
+  <link rel="icon" type="image/svg+xml" href="/assets/img/favicon.svg"/>
+  <link rel="stylesheet" href="/assets/css/style.css"/>
+  <style>
+    .auth-shell { min-height: 100vh; display: grid; place-items: center; padding: 24px; }
+    .auth-card {
+      width: 100%; max-width: 420px;
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 30px;
+      box-shadow: var(--shadow-lg);
+    }
+    .auth-brand { display:flex; gap:12px; align-items:center; margin-bottom: 24px; padding-bottom: 20px; border-bottom: 1px solid var(--border); }
+    .auth-brand img { height: 44px; }
+    .auth-card h2 { margin: 0 0 6px; font-size: 22px; }
+    .auth-card .sub { color: var(--text-mute); font-size: 13px; margin-bottom: 22px; }
+    .auth-card .err {
+      background: var(--danger-soft); color: var(--danger);
+      border: 1px solid rgba(239,68,68,.4); border-radius: 8px;
+      padding: 10px 12px; font-size: 12px; margin-bottom: 14px; display: none;
+    }
+    .auth-card .err.show { display: block; }
+    .auth-card .foot { font-size: 12px; color: var(--text-mute); text-align: center; margin-top: 18px; }
+  </style>
+</head>
+<body>
+<div class="auth-shell">
+  <div class="auth-card">
+    <div class="auth-brand">
+      <img src="/assets/img/sgtd-logo.svg" alt="SGTD"/>
+    </div>
+    <h2>Sign in to your workspace</h2>
+    <div class="sub">Welcome back. Enter your credentials to continue.</div>
+    <div class="err" id="err"></div>
+    <form id="login">
+      <div class="form-row full"><div>
+        <label class="fld">Email</label>
+        <input class="input" name="email" type="email" required/>
+      </div></div>
+      <div class="form-row full"><div>
+        <label class="fld">Password</label>
+        <input class="input" name="password" type="password" required/>
+      </div></div>
+      <button class="btn primary" type="submit" style="width:100%;justify-content:center;margin-top:6px;">
+        Sign in
+      </button>
+    </form>
+    <div class="foot">No account yet? Ask your workspace admin to invite you.</div>
+  </div>
+</div>
+
+<script src="/assets/js/api.js"></script>
+<script>
+  (async () => {
+    const s = await API.get('/api/v1/status');
+    if (!s.initialized) location.href = '/setup.html';
+    if (API.token()) location.href = '/';
+  })();
+
+  document.getElementById('login').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    const err = document.getElementById('err');
+    err.classList.remove('show');
+    try {
+      const r = await API.post('/api/v1/auth/login', Object.fromEntries(f));
+      API.setSession(r.token, r.user);
+      location.href = '/';
+    } catch (ex) {
+      err.textContent = ex.detail?.error === 'invalid_credentials'
+        ? 'Email or password incorrect.' : (ex.detail?.error || ex.message);
+      err.classList.add('show');
+    }
+  });
+</script>
+</body>
+</html>

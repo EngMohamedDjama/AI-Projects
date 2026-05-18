@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>SGTD IIoT Hub — API tokens</title>
+  <link rel="icon" type="image/svg+xml" href="/assets/img/favicon.svg"/>
+  <link rel="stylesheet" href="/assets/css/style.css"/>
+</head>
+<body>
+<script src="/assets/js/api.js"></script>
+<script src="/assets/js/icons.js"></script>
+<script src="/assets/js/layout.js"></script>
+<script>
+  (async () => {
+    await API.guardSetup();
+    const ctx = await Shell.mount({ pageId: 'tokens', title: 'API tokens', requireRole: 'admin' });
+    if (!ctx) return;
+
+    ctx.content.innerHTML = `
+      <div class="section-title">
+        <h2 id="count">Workspace API tokens</h2>
+        <div class="actions"><button class="btn primary" id="newBtn">+ New token</button></div>
+      </div>
+      <div class="card" style="padding:0;">
+        <table class="t">
+          <thead><tr><th>Name</th><th>Preview</th><th>Scopes</th><th>Created</th><th>Last used</th><th></th></tr></thead>
+          <tbody id="rows"></tbody>
+        </table>
+      </div>
+      <div class="card" style="margin-top:16px;">
+        <h3>${ICONS.bolt} Quick reference</h3>
+        <p style="color:var(--text-dim);">Workspace tokens authorize ingestion endpoints. Per-device tokens (shown on the device page) work for that one device only and are preferred for production.</p>
+      </div>
+    `;
+
+    async function load() {
+      const r = await API.get('/api/v1/tokens');
+      document.getElementById('count').textContent = r.tokens.length + ' token' + (r.tokens.length === 1 ? '' : 's');
+      const tb = document.getElementById('rows');
+      tb.innerHTML = '';
+      for (const t of r.tokens) {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td><strong>${escapeHTML(t.name)}</strong></td>
+          <td class="cell-mono">${escapeHTML(t.preview)}</td>
+          <td><span class="chip info"><span class="d"></span>${escapeHTML(t.scopes)}</span></td>
+          <td>${new Date(t.created_at).toLocaleDateString()}</td>
+          <td class="cell-mono" style="color:var(--text-mute);">${t.last_used ? fmtRelative(t.last_used) : 'never'}</td>
+          <td style="text-align:right;"><button class="btn ghost" data-del="${t.id}" style="color:var(--danger);">Revoke</button></td>`;
+        tb.appendChild(tr);
+      }
+      tb.querySelectorAll('[data-del]').forEach(b => b.addEventListener('click', async () => {
+        if (!confirm('Revoke this token?')) return;
+        await API.del('/api/v1/tokens/' + b.dataset.del); load();
+      }));
+    }
+
+    document.getElementById('newBtn').addEventListener('click', async () => {
+      const name = prompt('Token name (e.g. "Field gateway")');
+      if (!name) return;
+      const r = await API.post('/api/v1/tokens', { name });
+      prompt('Copy this token now — it will not be shown again:', r.token);
+      load();
+    });
+
+    load();
+  })();
+</script>
+</body>
+</html>

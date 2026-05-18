@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>SGTD IIoT Hub — Overview</title>
+  <link rel="icon" type="image/svg+xml" href="/assets/img/favicon.svg"/>
+  <link rel="stylesheet" href="/assets/css/style.css"/>
+  <script src="/assets/vendor/chart.umd.js"></script>
+</head>
+<body>
+<script src="/assets/js/api.js"></script>
+<script src="/assets/js/icons.js"></script>
+<script src="/assets/js/charts.js"></script>
+<script src="/assets/js/layout.js"></script>
+<script>
+  (async () => {
+    await API.guardSetup();
+    const ctx = await Shell.mount({ pageId: 'overview', title: 'Operations Overview' });
+    if (!ctx) return;
+    ctx.content.innerHTML = `
+      <div class="kpi-grid">
+        <div class="kpi"><div class="ico-bg">${ICONS.cpu}</div>
+          <div class="label">Connected devices</div>
+          <div class="value" id="k-devices">—</div>
+          <div class="trend up" id="k-devices-sub">…</div>
+        </div>
+        <div class="kpi"><div class="ico-bg">${ICONS.pulse}</div>
+          <div class="label">Messages / min</div>
+          <div class="value" id="k-mpm">—</div>
+          <div class="trend up">live ingest</div>
+        </div>
+        <div class="kpi"><div class="ico-bg">${ICONS.bolt}</div>
+          <div class="label">Active rules</div>
+          <div class="value" id="k-rules">—</div>
+          <div class="trend up">automated triggers</div>
+        </div>
+        <div class="kpi"><div class="ico-bg">${ICONS.alerts}</div>
+          <div class="label">Open alerts</div>
+          <div class="value" id="k-alerts">—</div>
+          <div class="trend down" id="k-alerts-sub">…</div>
+        </div>
+      </div>
+
+      <div class="grid-12" style="margin-top:18px;">
+        <div class="card col-8">
+          <h3>${ICONS.pulse} Throughput <span class="meta">messages / minute · last 30 minutes</span></h3>
+          <div class="chart-wrap"><canvas id="ch-throughput"></canvas></div>
+        </div>
+        <div class="card col-4">
+          <h3>Protocol mix <span class="meta">live devices</span></h3>
+          <div class="chart-wrap"><canvas id="ch-proto"></canvas></div>
+        </div>
+
+        <div class="card col-8">
+          <h3>Live activity <span class="meta"><span class="live"><span class="dot"></span>STREAMING</span></span></h3>
+          <div class="feed" id="feed"></div>
+        </div>
+        <div class="card col-4">
+          <h3>Recent alerts <span class="meta"><a href="/alerts.html">View all →</a></span></h3>
+          <div id="alerts-list" style="display:flex;flex-direction:column;gap:10px;"></div>
+        </div>
+      </div>
+    `;
+
+    let proto, throughput;
+    const labels = []; const mqttData = []; const httpData = []; const loraData = [];
+    let mpmCount = 0;
+
+    async function refresh() {
+      const m = await API.get('/api/v1/metrics/overview');
+      document.getElementById('k-devices').textContent = `${m.totals.online} / ${m.totals.devices}`;
+      document.getElementById('k-devices-sub').textContent =
+        `${m.totals.online} online · ${m.totals.devices - m.totals.online} offline`;
+      document.getElementById('k-mpm').textContent = m.totals.msgs_per_minute.toLocaleString();
+      document.getElementById('k-rules').textContent = m.totals.rules_active;
+      document.getElementById('k-alerts').textContent = m.totals.alerts_open;
+      const crit = (m.severity.find(s => s.severity === 'critical') || {}).c || 0;
+      const warn = (m.severity.find(s => s.severity === 'warning') || {}).c || 0;
+      document.getElementById('k-alerts-sub').textContent = `${crit} critical · ${warn} warnings · last 24h`;
+
+      // Throughput chart
+      labels.length = 0; mqttData.length = 0;
+      for (const b of m.throughput) {
+        labels.push(new Date(b.ts).toTimeString().slice(0,5));
+        mqttData.push(b.count);
+      }
+      if (throughput) { throughput.update('none'); }
+      else throughput = timeSeries(document.getElementById('ch-throughput'), labels, [
+        { label: 'Inbound', data: mqttData },
+      ]);
+
+      // Protocol doughnut
+      const labelsP = m.protocols.map(p => p.protocol.toUpperCase());
+      const dataP   = m.protocols.map(p => p.c);
+      if (proto) { proto.data.labels = labelsP; proto.data.datasets[0].data = dataP; proto.update('none'); }
+      else proto = doughnut(document.getElementById('ch-proto'), labelsP, dataP,
+        ['#22d3ee','#a78bfa','#10b981']);
+    }
+
+    async function loadAlerts() {
+      const r = await API.get('/api/v1/alerts?limit=6');
+      const el = document.getElementById('alerts-list');
+      el.innerHTML = '';
+      if (!r.alerts.length) {
+        el.innerHTML = '<div style="color:var(--text-mute);font-size:13px;padding:10px;">No alerts — fleet looks healthy.</div>';
+        return;
+      }
+      for (const a of r.alerts) {
+        const sev = a.severity === 'critical' ? 'danger' : a.severity === 'warning' ? 'warn' : 'info';
+        const node = document.createElement('div');
+        node.className = 'feed-item';
+        node.innerHTML = `
+          <div style="flex:1;">
+            <div style="display:flex;align-items:center;gap:8px;">
+              <span class="chip ${sev}"><span class="d"></span>${a.severity.toUpperCase()}</span>
+              <span class="src">${escapeHTML(a.device_serial || a.device_id || 'system')}</span>
+            </div>
+            <div class="msg" style="margin-top:4px;">${escapeHTML(a.message)}</div>
+            <div class="ts" style="margin-top:4px;">${fmtRelative(a.ts)}</div>
+          </div>`;
+        el.appendChild(node);
+      }
+    }
+
+    await refresh();
+    await loadAlerts();
+    setInterval(refresh, 10_000);
+    setInterval(loadAlerts, 15_000);
+
+    // Live feed
+    const feed = document.getElementById('feed');
+    Shell.on((msg) => {
+      if (msg.type === 'telemetry') {
+        mpmCount++;
+        const item = document.createElement('div');
+        item.className = 'feed-item';
+        const fieldStr = Object.entries(msg.fields)
+          .map(([k, v]) => `<strong>${escapeHTML(k)}</strong>=${typeof v === 'number' ? v.toFixed(2) : escapeHTML(String(v))}`)
+          .join(' · ');
+        item.innerHTML = `
+          <div class="ts">${new Date(msg.ts).toLocaleTimeString()}</div>
+          <div style="flex:1;min-width:0;">
+            <div class="src">${escapeHTML(msg.serial)}</div>
+            <div class="msg">${fieldStr}</div>
+          </div>`;
+        feed.prepend(item);
+        while (feed.childElementCount > 20) feed.lastElementChild.remove();
+      } else if (msg.type === 'alert') {
+        loadAlerts();
+      }
+    });
+  })();
+</script>
+</body>
+</html>
